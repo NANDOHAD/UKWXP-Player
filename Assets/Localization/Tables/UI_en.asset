@@ -1,0 +1,1262 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e9620f8c34305754d8cc9a7e49e852d9, type: 3}
+  m_Name: UI_en
+  m_EditorClassIdentifier: Unity.Localization::UnityEngine.Localization.Tables.StringTable
+  m_LocaleId:
+    m_Code: en
+  m_SharedData: {fileID: 11400000, guid: ca5c56cd409c13c4f8bd48d50302e89a, type: 2}
+  m_Metadata:
+    m_Items: []
+  m_TableData:
+  - m_Id: 3505381376
+    m_Localized: 3D Handle Tool
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4373602304
+    m_Localized: Close
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185216
+    m_Localized: Constraint Data
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185217
+    m_Localized: This operation is not available.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185218
+    m_Localized: Rename HOD
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185219
+    m_Localized: Export HOD
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185220
+    m_Localized: Load HOD
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185221
+    m_Localized: Paste HOD
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185222
+    m_Localized: Export HOD File
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185223
+    m_Localized: Select HOD File
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185224
+    m_Localized: HOD Editor
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185225
+    m_Localized: Lower
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185226
+    m_Localized: Neutral
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185227
+    m_Localized: OK
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185228
+    m_Localized: Object Override
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185229
+    m_Localized: Procedural Helper
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185230
+    m_Localized: ROBO Folder Path
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185231
+    m_Localized: Remove Part
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185232
+    m_Localized: Rename/Swap Part
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185233
+    m_Localized: Load Robo.hod
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185234
+    m_Localized: Load Script.ani
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185235
+    m_Localized: Overwrite Script.ani
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185236
+    m_Localized: Edit Script.spt
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185237
+    m_Localized: Edit Script.spt File
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185238
+    m_Localized: Script Frame
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185239
+    m_Localized: Script Header
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185240
+    m_Localized: Script Editor
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185241
+    m_Localized: Standby...
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185242
+    m_Localized: Upper
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185243
+    m_Localized: Load hangar.hod
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185244
+    m_Localized: Other
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185245
+    m_Localized: Dump Animation List
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185246
+    m_Localized: Synchronize Animation List
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185247
+    m_Localized: Rename Animation
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379520
+    m_Localized: 'Application:'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379521
+    m_Localized: Preferences
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379522
+    m_Localized: Reset Camera
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379523
+    m_Localized: Camera Move Speed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379524
+    m_Localized: Camera Settings
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379525
+    m_Localized: Cancel
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379526
+    m_Localized: Sub 1 (No. 104)
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379527
+    m_Localized: Sub 2 (No. 105)
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379528
+    m_Localized: Mecha Angle During Step (0-360)
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379529
+    m_Localized: Tool Type
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379530
+    m_Localized: Enter text
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379531
+    m_Localized: Enter a directory path...
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379532
+    m_Localized: Part Tree
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379533
+    m_Localized: Part Editor
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379534
+    m_Localized: Select Part
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379535
+    m_Localized: File
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379536
+    m_Localized: Flip
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379537
+    m_Localized: Use Free Camera
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379538
+    m_Localized: Frame Length
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379539
+    m_Localized: Per-Frame Transition
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379540
+    m_Localized: Procedural Helper (Not Implemented)
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379541
+    m_Localized: Procedural Editor
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379542
+    m_Localized: 'Assists with procedural pose editing.
+
+      Using it on parts other than hands or feet may produce unnatural results.
+
+      This feature is incomplete.'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379543
+    m_Localized: Reload
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379544
+    m_Localized: Loop Playback
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379545
+    m_Localized: Local
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379546
+    m_Localized: Pause
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379547
+    m_Localized: Position
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379548
+    m_Localized: 'Unsaved changes will be reset.
+
+      Open another ROBO?'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379549
+    m_Localized: Apply to All Animations
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379550
+    m_Localized: Copy All Values
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379551
+    m_Localized: Paste All Values
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379552
+    m_Localized: Play
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379553
+    m_Localized: Show Constraint Details
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379554
+    m_Localized: Directional Step Animations
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379555
+    m_Localized: Special Move Animations
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379556
+    m_Localized: Rotation
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379557
+    m_Localized: Synchronize Rotation to Constraint
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379558
+    m_Localized: Save Changes
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379559
+    m_Localized: Scale
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379560
+    m_Localized: Coordinate Space
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379561
+    m_Localized: Finisher (No. 109)
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379562
+    m_Localized: Apply to Selected Animation
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379563
+    m_Localized: Add New HOD
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379564
+    m_Localized: Open Another ROBO
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379565
+    m_Localized: Special Animations
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379566
+    m_Localized: View Mode
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379567
+    m_Localized: Exit
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379568
+    m_Localized: Edit
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379569
+    m_Localized: Finish Editing
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379570
+    m_Localized: Edit Mode
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379571
+    m_Localized: Show/Hide
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379572
+    m_Localized: Enable/Disable Helper
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379573
+    m_Localized: View Rotation Speed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379574
+    m_Localized: Reset View
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379575
+    m_Localized: Apply Settings
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379576
+    m_Localized: Configuration
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379577
+    m_Localized: Select a Mecha to Load
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379578
+    m_Localized: Copy Selected HOD
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379579
+    m_Localized: Move Selected HOD Up
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379580
+    m_Localized: Move Selected HOD Down
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379581
+    m_Localized: Delete Selected HOD
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379582
+    m_Localized: Move Selected Script Up
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379583
+    m_Localized: Move Selected Script Down
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379584
+    m_Localized: Delete Selected Script
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379585
+    m_Localized: Play Selected Animation
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379586
+    m_Localized: Add a new part to the selected tree location.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379587
+    m_Localized: Rename Selected Part
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379588
+    m_Localized: Copy Selected Part Data
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379589
+    m_Localized: Paste Selected Part Data
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379590
+    m_Localized: 'Delete
+
+      Selected Part'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379591
+    m_Localized: Target Selected Part
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379592
+    m_Localized: Delete Selected Part
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379593
+    m_Localized: Apply Selected Part Values to All HODs
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379594
+    m_Localized: 'Add Part at
+
+      Selected Position'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379595
+    m_Localized: Add Script at Selected Position
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379596
+    m_Localized: Add Part at Selected Position
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379597
+    m_Localized: Language
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379598
+    m_Localized: Loading complete.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379599
+    m_Localized: Loading...{0}%
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379600
+    m_Localized: No mecha data was found in the directory.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379601
+    m_Localized: No mecha data was found in the directory.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379602
+    m_Localized: Created the default directory (Windom_Data\Robo).
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379603
+    m_Localized: 'Failed to load mecha data.
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379604
+    m_Localized: Enter a name for the new HOD file (without the .hod extension).
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379605
+    m_Localized: Select the HOD file to load.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379606
+    m_Localized: 'No HOD files were found in the folder: {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379607
+    m_Localized: 'Failed to load the HOD file: {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379608
+    m_Localized: The loaded HOD contains {0} parts, but the current mecha contains {1}. Loading was canceled.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379609
+    m_Localized: 'An error occurred while loading the HOD file: {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379610
+    m_Localized: Enter a new animation name.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379611
+    m_Localized: This animation does not contain any HOD frames.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379612
+    m_Localized: Enter a new name for the HOD file.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379613
+    m_Localized: Apply the selected part values to every HOD.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379614
+    m_Localized: Apply the selected value to every HOD.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379615
+    m_Localized: 'Enter animation numbers separated by commas. Use a dash to specify a range. Example: 1,2, 6-10'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379616
+    m_Localized: Select a part to delete.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379617
+    m_Localized: The root part cannot be deleted.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379618
+    m_Localized: The part cannot be deleted because its data integrity could not be verified.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379619
+    m_Localized: Which part do you want to rename?
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379620
+    m_Localized: The specified part does not exist in the folder. It will be replaced with an empty part.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379621
+    m_Localized: Add a new part under {0}.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379622
+    m_Localized: 'Version: {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 3155927490560
+    m_Localized: Delete the selected part and all of its child parts?
+    m_Metadata:
+      m_Items: []
+  - m_Id: 3155948462080
+    m_Localized: Delete the selected part.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 3155948462081
+    m_Localized: New HOD File
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912269299712
+    m_Localized: Configuration
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912374157312
+    m_Localized: Viewing Mode
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912374157313
+    m_Localized: Test Mode
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351616
+    m_Localized: World
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351617
+    m_Localized: Unknown Mecha
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351618
+    m_Localized: Repair and Load
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351619
+    m_Localized: Repair Using treeDepth
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351620
+    m_Localized: Repair Using childCount
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351621
+    m_Localized: Exclude Inconsistent Parts and Load
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351622
+    m_Localized: Repair Hierarchy Manually
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351623
+    m_Localized: Validate and Apply
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351624
+    m_Localized: Leave Unconnected
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351625
+    m_Localized: Continue Read-Only
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351626
+    m_Localized: Return to Settings
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351627
+    m_Localized: <Out of range>
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351628
+    m_Localized: Part[{0}] "{1}"
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351629
+    m_Localized: No part information is available.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351630
+    m_Localized: '{0}: treeDepth is negative ({1}).'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351631
+    m_Localized: '{0}: the first part''s treeDepth must be 0 ({1}).'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351632
+    m_Localized: '{0}: treeDepth increases by more than one from the previous part ({1}->{2}).'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351633
+    m_Localized: '{0}: this is a root part after the first part.'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351634
+    m_Localized: '{0}: no preceding parent candidate exists for treeDepth={1}.'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351635
+    m_Localized: '{0}: childCount does not match (recorded={1}, calculated from depths={2}).'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351636
+    m_Localized: '
+
+      There are {0} more inconsistencies.'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545920
+    m_Localized: 'Part[{0}] "{1}": treeDepth {2}->{3}, childCount {4}->{5}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545921
+    m_Localized: '
+
+      {0} more changes will be repaired.'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545922
+    m_Localized: There is no unique automatic repair method for this inconsistency.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545923
+    m_Localized: No structure HOD is available.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545924
+    m_Localized: The structure HOD part count does not match the repair plan ({0}/{1}).
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545925
+    m_Localized: Structure HOD part[{0}] changed after the repair plan was created.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545926
+    m_Localized: No animation information is available.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545927
+    m_Localized: Animation[{0}] has no frame information.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545928
+    m_Localized: Animation[{0}] frame[{1}] has no part information.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545929
+    m_Localized: Animation[{0}] frame[{1}] part count does not match the structure HOD ({2}/{3}).
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545930
+    m_Localized: 'Animation[{0}] frame[{1}] part order does not match the structure HOD (position {2}: "{3}"/"{4}").'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545931
+    m_Localized: Cannot repair using treeDepth because no part information is available.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545932
+    m_Localized: The hierarchy cannot be reconstructed from treeDepth.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545933
+    m_Localized: Cannot repair using treeDepth.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545934
+    m_Localized: Repair childCount using treeDepth.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545935
+    m_Localized: Keep the hierarchy represented by treeDepth and recalculate childCount for all parts.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545936
+    m_Localized: Cannot repair using childCount because no part information is available.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545937
+    m_Localized: The hierarchy cannot be reconstructed from childCount.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545938
+    m_Localized: Cannot repair using childCount.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545939
+    m_Localized: Repair treeDepth using childCount.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545940
+    m_Localized: Keep the hierarchy represented by childCount and recalculate treeDepth for all parts.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545941
+    m_Localized: Cannot repair because no part information is available.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545942
+    m_Localized: The hierarchy cannot be reconstructed from either treeDepth or childCount.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545943
+    m_Localized: The part hierarchy has no inconsistencies.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545944
+    m_Localized: treeDepth and childCount each describe a different valid hierarchy.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545945
+    m_Localized: Automatic repair is not performed because the correct representation cannot be determined uniquely.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545946
+    m_Localized: childCount can be repaired using treeDepth.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545947
+    m_Localized: The treeDepth sequence is valid, but a valid hierarchy cannot be reconstructed from childCount.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545948
+    m_Localized: treeDepth can be repaired using childCount.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545949
+    m_Localized: The childCount sequence is valid, but a valid hierarchy cannot be reconstructed from treeDepth.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545950
+    m_Localized: Cannot repair because both treeDepth and childCount are inconsistent.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545951
+    m_Localized: 'treeDepth: {0}
+
+      childCount: {1}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545952
+    m_Localized: The first part's treeDepth is not 0 ({0}).
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545953
+    m_Localized: Part[{0}] has a negative treeDepth ({1}).
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545954
+    m_Localized: Part[{0}] is a root after the first part.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545955
+    m_Localized: Part[{0}]'s treeDepth increases by more than one ({1}->{2}).
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545956
+    m_Localized: Part[{0}] has a negative childCount ({1}).
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545957
+    m_Localized: There is no parent childCount slot available for Part[{0}].
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545958
+    m_Localized: childCount requires {0} more child parts than are available.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545959
+    m_Localized: Part[{0}] "{1}"{2}
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545960
+    m_Localized: ' (including {0} descendants)'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545961
+    m_Localized: '{0} more ranges'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545962
+    m_Localized: A total of {0} parts will be excluded.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545963
+    m_Localized: The orphan parts that can be safely excluded cannot be identified uniquely.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545964
+    m_Localized: The structure HOD part count after exclusion does not match the repair plan.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545965
+    m_Localized: 'Hierarchy validation failed after exclusion.
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545966
+    m_Localized: The structure HOD part count does not match the exclusion plan ({0}/{1}).
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545967
+    m_Localized: Structure HOD part[{0}] changed after the exclusion plan was created.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545968
+    m_Localized: Animation[{0}] frame[{1}] hierarchy data does not match the structure HOD (position {2}).
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545969
+    m_Localized: Cannot exclude parts because no part information is available.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545970
+    m_Localized: Automatic exclusion is not performed because the values can be repaired or the exclusion target is ambiguous.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545971
+    m_Localized: The safe exclusion range cannot be determined because the first root treeDepth is invalid.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545972
+    m_Localized: The child hierarchy range cannot be determined because Part[{0}] has a negative treeDepth.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545973
+    m_Localized: No valid root part would remain after exclusion.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545974
+    m_Localized: 'The remaining treeDepth values cannot form a valid hierarchy after exclusion.
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545975
+    m_Localized: '{0} orphan parts that cannot connect to a parent can be excluded.'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545976
+    m_Localized: After exclusion, childCount will be rebuilt using the remaining treeDepth values.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545977
+    m_Localized: The first part is not a root.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545978
+    m_Localized: Part[{0}] cannot be connected to the parent hierarchy (treeDepth={1}).
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545979
+    m_Localized: Part[{0}] has no parent candidate.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545980
+    m_Localized: There are no inconsistent parts that can be safely excluded.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545981
+    m_Localized: The structure HOD has no part information.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545982
+    m_Localized: '[{0}] {1}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545983
+    m_Localized: '{0} (root fixed)'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545984
+    m_Localized: '{0} -> Unconnected'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545985
+    m_Localized: '{0} -> {1}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545986
+    m_Localized: The root part is fixed and its parent cannot be changed.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545987
+    m_Localized: Only a part that appears before this part can be selected as its parent.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545988
+    m_Localized: '{0} parts have no parent assigned.'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545989
+    m_Localized: Part[{0}] has an invalid parent assignment.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545990
+    m_Localized: Not all parts can be connected to the root.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545991
+    m_Localized: 'A valid part hierarchy could not be built from the manual assignments.
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545992
+    m_Localized: The structure HOD changed after manual repair began.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545993
+    m_Localized: Structure HOD part[{0}] changed after manual repair began.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545994
+    m_Localized: The frame count changed after manual repair began.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545995
+    m_Localized: Animation[{0}] frame[{1}] changed after manual repair began.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545996
+    m_Localized: Animation[{0}] frame[{1}] part[{2}] changed after manual repair began.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545997
+    m_Localized: 'Loading was canceled because the HOD hierarchy could not be repaired safely.
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545998
+    m_Localized: 'Loading was canceled because the inconsistent parts could not be excluded safely.
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545999
+    m_Localized: 'The HOD part hierarchy contains inconsistencies.
+
+
+'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546000
+    m_Localized: '
+
+
+      Planned repair:
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546001
+    m_Localized: '
+
+
+      Automatic repair cannot be applied:
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546002
+    m_Localized: '
+
+
+      If treeDepth is treated as authoritative:
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546003
+    m_Localized: '
+
+
+      Repair using treeDepth cannot be applied:
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546004
+    m_Localized: '
+
+
+      If childCount is treated as authoritative:
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546005
+    m_Localized: '
+
+
+      Repair using childCount cannot be applied:
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546006
+    m_Localized: '
+
+
+      Manual repair lets you assign each part''s parent and rebuild the structure HOD and all animation frames in the same order.'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546007
+    m_Localized: '
+
+
+      Manual repair cannot be started:
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546008
+    m_Localized: '
+
+
+      Exclusion candidate:
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546009
+    m_Localized: '
+
+
+      Inconsistent parts cannot be excluded:
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546010
+    m_Localized: '
+
+
+      Changes are made in memory only; the original files will not be overwritten automatically.'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546011
+    m_Localized: '
+
+
+      You can continue in read-only mode to view the data.'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546012
+    m_Localized: 'Manual HOD Part Hierarchy Repair
+
+
+'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546013
+    m_Localized: Select a part to repair and specify its parent.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546014
+    m_Localized: 'The root is fixed to Part[0].
+
+'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546015
+    m_Localized: 'Unconnected: {0} / {1}
+
+
+'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546016
+    m_Localized: 'Current connections:'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546017
+    m_Localized: 'Manual repair cannot be applied.
+
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546018
+    m_Localized: 'Select the parent part for {0}.
+
+      Only parts listed before it can be selected to prevent cycles.'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546019
+    m_Localized: 'The parent part cannot be set.
+
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6919800914698240
+    m_Localized: Option
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9484516887355392
+    m_Localized: 'Failed to save the ANI file.
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9502022163226624
+    m_Localized: The structure HOD and animation frames do not have matching part order or hierarchy columns.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9502022255501312
+    m_Localized: 'The legacy ANI was loaded without automatically repairing its HOD part hierarchy. When adding or removing parts, a normalization confirmation is shown only if a safe authoritative hierarchy can be determined.
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9601983836053504
+    m_Localized: The data was not loaded as a legacy ANI.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9601983882190848
+    m_Localized: The legacy ANI cannot be edited safely using the selected hierarchy representation.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9601983882190849
+    m_Localized: 'The legacy ANI hierarchy could not be prepared for structural editing.
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9601983882190850
+    m_Localized: Legacy ANI animation[{0}] frame[{1}] cannot be edited safely because its hierarchy columns at index {2} do not match the structure HOD.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9601983882190851
+    m_Localized: No legacy ANI structural-edit preparation is available.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9601983882190852
+    m_Localized: The legacy ANI treeDepth and childCount values describe different valid hierarchies. To add or remove parts, select which representation should be authoritative for the structure HOD and every frame. The source file is unchanged until you save.
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9601983882190853
+    m_Localized: The legacy ANI retains its hierarchy values as loaded. To add or remove parts, the hierarchy columns in the structure HOD and every frame will be normalized as shown below. The source file is unchanged until you save. Normalize and continue structural editing?
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9601983882190854
+    m_Localized: '
+
+
+      [treeDepth]
+
+      {0}
+
+
+      [childCount]
+
+      {1}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9756767775875072
+    m_Localized: "The selected file uses the legacy ANI format. Convert it to AN2 before loading?\n\nOK: Create and load an AN2 copy named \"{0}\" without changing the original legacy ANI. The original game uses up to the first 200 slots; extra slots are retained at the end for this editor. Problematic comment characters are made safe for execution. Unparsed legacy-only trailing data is not included in the AN2 copy.\nCancel: Load the legacy ANI unchanged."
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9756767830401024
+    m_Localized: 'The legacy ANI could not be converted to AN2, so loading was stopped. The original legacy ANI was not changed.
+
+      {0}'
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9756767830401025
+    m_Localized: "The legacy ANI was converted to AN2 and the converted file was loaded.\nSaved to: {0}\nThe original legacy ANI was not changed.\nSlots used by the original game: {1} (maximum 200)\nExtra slots retained for this editor: {2} (not used by the original game)"
+    m_Metadata:
+      m_Items: []
+  - m_Id: 10611999460286464
+    m_Localized: Save Script.ani. Do you want to overwrite it?
+    m_Metadata:
+      m_Items: []
+  references:
+    version: 2
+    RefIds: []

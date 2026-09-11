@@ -1,0 +1,1148 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5b11a58205ec3474ca216360e9fa74a8, type: 3}
+  m_Name: UI Shared Data
+  m_EditorClassIdentifier: Unity.Localization::UnityEngine.Localization.Tables.SharedTableData
+  m_TableCollectionName: UI
+  m_TableCollectionNameGuidString: ca5c56cd409c13c4f8bd48d50302e89a
+  m_Entries:
+  - m_Id: 3505381376
+    m_Key: fixed.137097fadfe9b92d
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4373602304
+    m_Key: fixed.81451a14ec0e1e62
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185216
+    m_Key: fixed.8e5ce0c0e675996d
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185217
+    m_Key: fixed.b077ef106c252637
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185218
+    m_Key: fixed.00a36837d0035195
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185219
+    m_Key: fixed.f02c86d591a0139f
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185220
+    m_Key: fixed.e635dff413f22f5e
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185221
+    m_Key: fixed.708ec1f1cf8f15f6
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185222
+    m_Key: fixed.0c2ec55c279450ba
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185223
+    m_Key: fixed.23d953508a328e95
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185224
+    m_Key: fixed.384cf5e006e3de14
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185225
+    m_Key: fixed.9831958b7e65ab95
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185226
+    m_Key: fixed.6356af60c5720964
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185227
+    m_Key: fixed.fd630b802f065325
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185228
+    m_Key: fixed.2243fae5c728a742
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185229
+    m_Key: fixed.80b3c2365b67f253
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185230
+    m_Key: fixed.d568f55c81f81ccf
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185231
+    m_Key: fixed.5b3bbefb3838aff3
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185232
+    m_Key: fixed.08c7e2cbbf643b1e
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185233
+    m_Key: fixed.dd5b2e8e4b2343fe
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185234
+    m_Key: fixed.5be177ffed5d80d8
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185235
+    m_Key: fixed.38c66033ea7b3f05
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185236
+    m_Key: fixed.ed9f56721630943d
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185237
+    m_Key: fixed.eb4786c1610e9f3b
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185238
+    m_Key: fixed.5ad96eb7b53e5e14
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185239
+    m_Key: fixed.2576298279a59703
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185240
+    m_Key: fixed.016675486533e8fb
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185241
+    m_Key: fixed.6e588d85b6413f12
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185242
+    m_Key: fixed.35812762dea55c6d
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185243
+    m_Key: fixed.1fb0e2b2fe8a8c74
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185244
+    m_Key: fixed.1ff35f843398df2f
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185245
+    m_Key: fixed.d906aca6655de01b
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185246
+    m_Key: fixed.8fea1449008c8f12
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4386185247
+    m_Key: fixed.11a312956325febf
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379520
+    m_Key: fixed.c5960b9e7ff9a86a
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379521
+    m_Key: fixed.d0f8e3ef5ff77524
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379522
+    m_Key: fixed.ab82c092b51207b1
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379523
+    m_Key: fixed.aa591e6b673b849c
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379524
+    m_Key: fixed.45073a0446aa3c91
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379525
+    m_Key: fixed.201afbe25f7be849
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379526
+    m_Key: fixed.98fd980189113aeb
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379527
+    m_Key: fixed.b4a2be064f68c894
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379528
+    m_Key: fixed.c7febf981cb65ba3
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379529
+    m_Key: fixed.d3d82cf1dc2149fb
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379530
+    m_Key: fixed.2a6d28c56307bb4b
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379531
+    m_Key: fixed.27318853bf2c0ece
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379532
+    m_Key: fixed.c8aa8461ec25d0d5
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379533
+    m_Key: fixed.94fd7c7aef8e80a0
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379534
+    m_Key: fixed.01ad06a72a0c4845
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379535
+    m_Key: fixed.c58023e2346d64e9
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379536
+    m_Key: fixed.e9e4028ac676b3c2
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379537
+    m_Key: fixed.78fb8bc3951a4dae
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379538
+    m_Key: fixed.6837467389ac4de8
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379539
+    m_Key: fixed.06660f065b2d08f4
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379540
+    m_Key: fixed.f3c6b4b9157d27c3
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379541
+    m_Key: fixed.5a4548fe54acf3d5
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379542
+    m_Key: fixed.4c02e4230a7d4be5
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379543
+    m_Key: fixed.3e53499a45186406
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379544
+    m_Key: fixed.2f76d5a2b1025205
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379545
+    m_Key: fixed.8e08fea47def4caf
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379546
+    m_Key: fixed.035eae188265bb2c
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379547
+    m_Key: fixed.0e307c51630d9505
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379548
+    m_Key: fixed.9aee4457474deeb9
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379549
+    m_Key: fixed.fe4a40d86ccf4e35
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379550
+    m_Key: fixed.aa680b3c9df0f7a4
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379551
+    m_Key: fixed.6ca7ba55ac086624
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379552
+    m_Key: fixed.1150f138c75727c9
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379553
+    m_Key: fixed.951d80aca8cbe550
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379554
+    m_Key: fixed.c644fd1ce8ac83da
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379555
+    m_Key: fixed.5144b2ae9513800a
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379556
+    m_Key: fixed.5c9471dd6e900962
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379557
+    m_Key: fixed.27e7e5ba5aeab42f
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379558
+    m_Key: fixed.5257ca11de403947
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379559
+    m_Key: fixed.295de5b060ba76b8
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379560
+    m_Key: fixed.7c7ca306bcf2ae5a
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379561
+    m_Key: fixed.5b5c88d97e8db0c9
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379562
+    m_Key: fixed.f33acd847521aed9
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379563
+    m_Key: fixed.443c812a7524f3c6
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379564
+    m_Key: fixed.a6cf3cb967538beb
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379565
+    m_Key: fixed.39cae0b97e7b59de
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379566
+    m_Key: fixed.7e0077a6da0cd948
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379567
+    m_Key: fixed.73ab6afa78335c6e
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379568
+    m_Key: fixed.2404b1cbad4e1cad
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379569
+    m_Key: fixed.3b151c6d5c8d4cf3
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379570
+    m_Key: fixed.2e8191f951e9a9eb
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379571
+    m_Key: fixed.fe1650e79992f7f8
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379572
+    m_Key: fixed.03b52dd2ee1a01c4
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379573
+    m_Key: fixed.0938ba12e7416fe0
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379574
+    m_Key: fixed.c1f79c655eea26a0
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379575
+    m_Key: fixed.50eb018787b83306
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379576
+    m_Key: fixed.31b6cc7911797390
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379577
+    m_Key: fixed.4818e2ef55b44b4b
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379578
+    m_Key: fixed.a82c1af8476a06c0
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379579
+    m_Key: fixed.43b8185439a8a3a5
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379580
+    m_Key: fixed.a31004c193bc0038
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379581
+    m_Key: fixed.00b263c8d65a78d3
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379582
+    m_Key: fixed.07ec814e0eb0c29e
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379583
+    m_Key: fixed.4ec091407181ccde
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379584
+    m_Key: fixed.3b748bfca12bc123
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379585
+    m_Key: fixed.9d8638ea194b5337
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379586
+    m_Key: fixed.60632addc946dc25
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379587
+    m_Key: fixed.32a9ebb1bc35281f
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379588
+    m_Key: fixed.98c89a3390288e7f
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379589
+    m_Key: fixed.0ece56360df6dbe7
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379590
+    m_Key: fixed.a3b28a4880fa0d01
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379591
+    m_Key: fixed.d717dee91c946121
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379592
+    m_Key: fixed.06981d996eb0ff4a
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379593
+    m_Key: fixed.8083675f788a16eb
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379594
+    m_Key: fixed.dd7d4339dd510e40
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379595
+    m_Key: fixed.c2255794396dc029
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379596
+    m_Key: fixed.7f8311d246ff2fc0
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379597
+    m_Key: fixed.8d9265d248cf521d
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379598
+    m_Key: status.loading.complete
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379599
+    m_Key: status.loading.progress
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379600
+    m_Key: dialog.no_mecha_data
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379601
+    m_Key: dialog.no_mecha_data_found
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379602
+    m_Key: dialog.initial_directory_created
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379603
+    m_Key: dialog.mecha_load_failed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379604
+    m_Key: dialog.hod_new_name
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379605
+    m_Key: dialog.hod_select
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379606
+    m_Key: dialog.hod_not_found
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379607
+    m_Key: dialog.hod_load_failed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379608
+    m_Key: dialog.hod_part_count_mismatch
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379609
+    m_Key: dialog.hod_load_exception
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379610
+    m_Key: dialog.animation_new_name
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379611
+    m_Key: dialog.hod_no_frames
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379612
+    m_Key: dialog.hod_rename
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379613
+    m_Key: dialog.apply_selected_part_all_hods
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379614
+    m_Key: dialog.apply_selected_value_all_hods
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379615
+    m_Key: dialog.animation_sync_range
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379616
+    m_Key: dialog.select_part_to_delete
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379617
+    m_Key: dialog.root_part_cannot_delete
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379618
+    m_Key: dialog.part_data_invalid_delete
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379619
+    m_Key: dialog.part_select_rename
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379620
+    m_Key: dialog.part_missing_use_empty
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379621
+    m_Key: dialog.add_part_under
+    m_Metadata:
+      m_Items: []
+  - m_Id: 4390379622
+    m_Key: help.application_version
+    m_Metadata:
+      m_Items: []
+  - m_Id: 3155927490560
+    m_Key: dialog.delete_part_with_children
+    m_Metadata:
+      m_Items: []
+  - m_Id: 3155948462080
+    m_Key: dialog.delete_selected_part
+    m_Metadata:
+      m_Items: []
+  - m_Id: 3155948462081
+    m_Key: default.hod_new_name
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912269299712
+    m_Key: fixed.e0d864c56160c9f8
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912374157312
+    m_Key: fixed.fa54fcec1e88ec00
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912374157313
+    m_Key: fixed.df300de2014b5d0f
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351616
+    m_Key: fixed.c8ab9ac75f02ca37
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351617
+    m_Key: fixed.21411e6a8c9aa733
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351618
+    m_Key: fixed.e7ee3ed0c4cf4760
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351619
+    m_Key: fixed.98cd6b5ee78acae5
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351620
+    m_Key: fixed.66f7c0def59c4d4d
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351621
+    m_Key: fixed.8f1e98674d0499c5
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351622
+    m_Key: fixed.8871a7fcf4c2bdd9
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351623
+    m_Key: fixed.dedf7804ec546112
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351624
+    m_Key: fixed.da21dbd1eb1c9674
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351625
+    m_Key: fixed.aa001a633c086be5
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351626
+    m_Key: fixed.e391eec0b30bf4b8
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351627
+    m_Key: fixed.a19d027e1a16f2a4
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351628
+    m_Key: hod.part.label
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351629
+    m_Key: hod.validator.no_parts
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351630
+    m_Key: hod.validator.tree_depth_negative
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351631
+    m_Key: hod.validator.first_tree_depth
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351632
+    m_Key: hod.validator.tree_depth_jump
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351633
+    m_Key: hod.validator.additional_root
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351634
+    m_Key: hod.validator.missing_parent
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351635
+    m_Key: hod.validator.child_count_mismatch
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912378351636
+    m_Key: hod.validator.more_issues
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545920
+    m_Key: hod.repair.preview_change
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545921
+    m_Key: hod.repair.preview_more
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545922
+    m_Key: hod.repair.no_unique_method
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545923
+    m_Key: hod.repair.no_structure
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545924
+    m_Key: hod.repair.structure_part_count
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545925
+    m_Key: hod.repair.structure_changed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545926
+    m_Key: hod.repair.no_animations
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545927
+    m_Key: hod.repair.animation_frames_missing
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545928
+    m_Key: hod.repair.frame_parts_missing
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545929
+    m_Key: hod.repair.frame_part_count
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545930
+    m_Key: hod.repair.frame_order_mismatch
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545931
+    m_Key: hod.repair.tree_depth.no_parts_summary
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545932
+    m_Key: hod.repair.tree_depth.no_parts_details
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545933
+    m_Key: hod.repair.tree_depth.unrepairable
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545934
+    m_Key: hod.repair.tree_depth.summary
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545935
+    m_Key: hod.repair.tree_depth.details
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545936
+    m_Key: hod.repair.child_count.no_parts_summary
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545937
+    m_Key: hod.repair.child_count.no_parts_details
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545938
+    m_Key: hod.repair.child_count.unrepairable
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545939
+    m_Key: hod.repair.child_count.summary
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545940
+    m_Key: hod.repair.child_count.details
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545941
+    m_Key: hod.repair.no_parts_summary
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545942
+    m_Key: hod.repair.no_parts_details
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545943
+    m_Key: hod.repair.no_inconsistency
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545944
+    m_Key: hod.repair.ambiguous.summary
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545945
+    m_Key: hod.repair.ambiguous.details
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545946
+    m_Key: hod.repair.tree_depth.can_repair_summary
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545947
+    m_Key: hod.repair.tree_depth.can_repair_details
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545948
+    m_Key: hod.repair.child_count.can_repair_summary
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545949
+    m_Key: hod.repair.child_count.can_repair_details
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545950
+    m_Key: hod.repair.both_invalid.summary
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545951
+    m_Key: hod.repair.both_invalid.details
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545952
+    m_Key: hod.repair.reason.first_tree_depth
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545953
+    m_Key: hod.repair.reason.tree_depth_negative
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545954
+    m_Key: hod.repair.reason.additional_root
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545955
+    m_Key: hod.repair.reason.tree_depth_jump
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545956
+    m_Key: hod.repair.reason.child_count_negative
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545957
+    m_Key: hod.repair.reason.no_parent_slot
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545958
+    m_Key: hod.repair.reason.missing_children
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545959
+    m_Key: hod.prune.preview_range
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545960
+    m_Key: hod.prune.preview_descendants
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545961
+    m_Key: hod.prune.preview_more_ranges
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545962
+    m_Key: hod.prune.preview_total
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545963
+    m_Key: hod.prune.no_unique_orphan
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545964
+    m_Key: hod.prune.structure_part_count
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545965
+    m_Key: hod.prune.validation_failed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545966
+    m_Key: hod.prune.structure_plan_count
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545967
+    m_Key: hod.prune.structure_changed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545968
+    m_Key: hod.prune.frame_hierarchy_mismatch
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545969
+    m_Key: hod.prune.no_parts
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545970
+    m_Key: hod.prune.repair_or_ambiguous
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545971
+    m_Key: hod.prune.invalid_root_depth
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545972
+    m_Key: hod.prune.negative_depth_range
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545973
+    m_Key: hod.prune.no_root_after_prune
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545974
+    m_Key: hod.prune.depth_rebuild_failed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545975
+    m_Key: hod.prune.summary
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545976
+    m_Key: hod.prune.details
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545977
+    m_Key: hod.prune.rebuild_no_root
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545978
+    m_Key: hod.prune.rebuild_unconnectable
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545979
+    m_Key: hod.prune.rebuild_no_parent
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545980
+    m_Key: hod.prune.unavailable_summary
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545981
+    m_Key: hod.manual.no_structure_parts
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545982
+    m_Key: hod.manual.part_label
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545983
+    m_Key: hod.manual.root_assignment
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545984
+    m_Key: hod.manual.unconnected_assignment
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545985
+    m_Key: hod.manual.parent_assignment
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545986
+    m_Key: hod.manual.root_immutable
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545987
+    m_Key: hod.manual.parent_must_precede
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545988
+    m_Key: hod.manual.unassigned_parts
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545989
+    m_Key: hod.manual.invalid_parent
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545990
+    m_Key: hod.manual.not_all_connected
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545991
+    m_Key: hod.manual.validation_failed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545992
+    m_Key: hod.manual.structure_changed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545993
+    m_Key: hod.manual.structure_part_changed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545994
+    m_Key: hod.manual.frame_count_changed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545995
+    m_Key: hod.manual.frame_changed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545996
+    m_Key: hod.manual.frame_part_changed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545997
+    m_Key: hod.ui.repair_apply_failed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545998
+    m_Key: hod.ui.prune_apply_failed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382545999
+    m_Key: hod.ui.inconsistent_header
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546000
+    m_Key: hod.ui.repair_preview
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546001
+    m_Key: hod.ui.repair_unavailable
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546002
+    m_Key: hod.ui.tree_depth_case
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546003
+    m_Key: hod.ui.tree_depth_unavailable
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546004
+    m_Key: hod.ui.child_count_case
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546005
+    m_Key: hod.ui.child_count_unavailable
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546006
+    m_Key: hod.ui.manual_available
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546007
+    m_Key: hod.ui.manual_unavailable
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546008
+    m_Key: hod.ui.prune_candidate
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546009
+    m_Key: hod.ui.prune_unavailable
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546010
+    m_Key: hod.ui.memory_only
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546011
+    m_Key: hod.ui.read_only_continue
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546012
+    m_Key: hod.ui.manual_header
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546013
+    m_Key: hod.ui.manual_instructions
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546014
+    m_Key: hod.ui.manual_root
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546015
+    m_Key: hod.ui.manual_unassigned
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546016
+    m_Key: hod.ui.current_connections
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546017
+    m_Key: hod.ui.manual_apply_failed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546018
+    m_Key: hod.ui.parent_selection
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6881912382546019
+    m_Key: hod.ui.parent_set_failed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 6919800914698240
+    m_Key: fixed.80b3c2365b67f255
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9484516887355392
+    m_Key: dialog.ani_save_failed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9502022163226624
+    m_Key: hod.repair.frame_sync_required
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9502022255501312
+    m_Key: hod.ui.legacy_unrepaired_warning
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9601983836053504
+    m_Key: hod.legacy_edit.not_legacy
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9601983882190848
+    m_Key: hod.legacy_edit.authority_unavailable
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9601983882190849
+    m_Key: hod.legacy_edit.apply_failed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9601983882190850
+    m_Key: hod.legacy_edit.frame_index_mismatch
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9601983882190851
+    m_Key: hod.legacy_edit.no_plan
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9601983882190852
+    m_Key: hod.legacy_edit.choose_authority
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9601983882190853
+    m_Key: hod.legacy_edit.confirm_normalize
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9601983882190854
+    m_Key: hod.legacy_edit.choice_previews
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9756767775875072
+    m_Key: ani.legacy_conversion.prompt
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9756767830401024
+    m_Key: ani.legacy_conversion.failed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 9756767830401025
+    m_Key: ani.legacy_conversion.completed
+    m_Metadata:
+      m_Items: []
+  - m_Id: 10611999460286464
+    m_Key: fixed.7e0077a6da0cd945
+    m_Metadata:
+      m_Items: []
+  m_Metadata:
+    m_Items: []
+  m_KeyGenerator:
+    rid: 7350444201260876013
+  references:
+    version: 2
+    RefIds:
+    - rid: 7350444201260876013
+      type: {class: DistributedUIDGenerator, ns: UnityEngine.Localization.Tables, asm: Unity.Localization}
+      data:
+        m_CustomEpoch: 1785772877420
