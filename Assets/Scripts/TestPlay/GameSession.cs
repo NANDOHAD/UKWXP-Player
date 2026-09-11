@@ -23,6 +23,8 @@ public sealed class TestPlayMechSpawn
     public TestPlayCameraController Camera;
     public bool ShowHud;
     public GameObject HudCanvas;
+    /// <summary>Optional scene-placed presentation mapping owner; not released with the mech.</summary>
+    public TestPlayPresentationRuntime PresentationTemplate;
     public bool UseColliderGrounding = true;
     /// <summary>Optional scene mech slot. When set, UnityMechBuilder assembles into it without owning the GameObject.</summary>
     public GameObject Host;
@@ -111,6 +113,7 @@ public sealed class GameSession : ITestPlayTargetProvider
             requests.Add(new TestPlayMechSpawn { SourcePath = s.SourcePath, Position = s.Position,
                 Rotation = s.Rotation, TargetRadius = s.TargetRadius, Input = s.Input,
                 Camera = s.Camera, ShowHud = s.ShowHud, HudCanvas = s.HudCanvas,
+                PresentationTemplate = s.PresentationTemplate,
                 UseColliderGrounding = s.UseColliderGrounding, Host = s.Host });
         }
         var session = new GameSession(clock) { Status = "Loading" };
@@ -136,7 +139,8 @@ public sealed class GameSession : ITestPlayTargetProvider
                 assets.Register(mech.Controller);
                 mech.Controller.useColliderGrounding = s.UseColliderGrounding;
                 mech.Controller.Initialize(new TestPlayContext { Robo = assets.Robo, Spt = assets.Spt,
-                    Camera = s.Camera, ShowHud = s.ShowHud, HudCanvas = s.HudCanvas });
+                    Camera = s.Camera, ShowHud = s.ShowHud, HudCanvas = s.HudCanvas,
+                    PresentationTemplate = s.PresentationTemplate });
                 mech.Controller.AttachSession(session, mech.Handle);
                 // Allow cancellation between complete mech loads, including synchronous imports.
                 await Task.Yield();

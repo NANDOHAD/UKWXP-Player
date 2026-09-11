@@ -10,6 +10,8 @@ public sealed class TestPlaySessionBootstrap : MonoBehaviour
     public Camera gameCamera;
     [Tooltip("プレイヤー機体用。シーン配置の TestPlayHUDCanvas。未設定時は実行時生成。")]
     public GameObject hudCanvas;
+    [Tooltip("実行時生成機体へコピーするPresentation mapping。未設定時は既存の空mappingのまま。")]
+    public TestPlayPresentationRuntime presentationTemplate;
     [Tooltip("自機スロット。未設定時はセッション都度 SessionMech を生成する。")]
     public TestPlayMechSlot playerSlot;
     [Tooltip("相手機スロット。未設定時はセッション都度 SessionMech を生成する。")]
@@ -60,9 +62,9 @@ public sealed class TestPlaySessionBootstrap : MonoBehaviour
             }
             Session = await GameSession.CreateAsync(new[] {
                 CreateSpawn(firstPath, playerSlot, new Vector3(-3, 0, 0), Quaternion.identity,
-                    keyboard, cameraAdapter, showHud: true, hudCanvas),
+                    keyboard, cameraAdapter, showHud: true, hudCanvas, presentationTemplate),
                 CreateSpawn(secondPath, opponentSlot, new Vector3(3, 0, 12), Quaternion.Euler(0, 180, 0),
-                    new TestPlayIdleInputProvider(), null, showHud: false, null)
+                    new TestPlayIdleInputProvider(), null, showHud: false, null, null)
             }, TestPlaySessionClock.Automatic, token);
             token.ThrowIfCancellationRequested();
             Session.Start();
@@ -166,12 +168,13 @@ public sealed class TestPlaySessionBootstrap : MonoBehaviour
     static TestPlayMechSpawn CreateSpawn(string path, TestPlayMechSlot slot,
         Vector3 fallbackPosition, Quaternion fallbackRotation,
         ITestPlayInputProvider input, TestPlayCameraController camera,
-        bool showHud, GameObject hudCanvas)
+        bool showHud, GameObject hudCanvas, TestPlayPresentationRuntime presentationTemplate)
     {
         bool useSlot = slot != null;
         return new TestPlayMechSpawn
         {
             SourcePath = path,
+            PresentationTemplate = presentationTemplate,
             Host = useSlot ? slot.gameObject : null,
             Position = useSlot ? slot.SpawnPosition : fallbackPosition,
             Rotation = useSlot ? slot.SpawnRotation : fallbackRotation,

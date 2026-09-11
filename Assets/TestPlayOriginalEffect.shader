@@ -6,67 +6,10 @@ Shader "WindomXP/TestPlayOriginalEffect"
         _TintColor ("Tint", Color) = (1,1,1,1)
     }
 
-    SubShader
-    {
-        Tags
-        {
-            "RenderType" = "Transparent"
-            "Queue" = "Transparent"
-            "RenderPipeline" = "UniversalPipeline"
-        }
-
-        Pass
-        {
-            Name "OriginalEffect"
-            Blend SrcAlpha One
-            ZWrite Off
-            Cull Off
-
-            HLSLPROGRAM
-            #pragma vertex Vert
-            #pragma fragment Frag
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
-
-            struct Attributes
-            {
-                float4 positionOS : POSITION;
-                float2 uv : TEXCOORD0;
-            };
-
-            struct Varyings
-            {
-                float4 positionCS : SV_POSITION;
-                float2 uv : TEXCOORD0;
-            };
-
-            TEXTURE2D(_MainTex);
-            SAMPLER(sampler_MainTex);
-
-            CBUFFER_START(UnityPerMaterial)
-                float4 _MainTex_ST;
-                half4 _TintColor;
-            CBUFFER_END
-
-            Varyings Vert(Attributes input)
-            {
-                Varyings output;
-                output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
-                output.uv = input.uv * _MainTex_ST.xy + _MainTex_ST.zw;
-                return output;
-            }
-
-            half4 Frag(Varyings input) : SV_Target
-            {
-                return SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, input.uv) * _TintColor;
-            }
-            ENDHLSL
-        }
-    }
-
-    // GraphicsSettings may intentionally run without an SRP asset (Built-in),
-    // including projects where the former URP asset is unavailable. Keep the
-    // same additive texture semantics instead of letting the URP-only SubShader
-    // silently disappear.
+    // The current 6000.6 project resolves the built-in renderer and does not
+    // declare a Universal Render Pipeline package. Keep this effect independent
+    // of an unavailable URP include; the additive texture semantics are shared
+    // by the standalone Player and Editor fallback renderer.
     SubShader
     {
         Tags

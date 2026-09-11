@@ -10,4 +10,6 @@ public sealed class TestPlayContext
     public bool ShowHud = true;
     /// <summary>Scene-placed HUD canvas for the player mech. Null falls back to runtime generation.</summary>
     public GameObject HudCanvas;
+    /// <summary>Optional scene/template presentation mapping. Existing runtime mappings remain authoritative.</summary>
+    public TestPlayPresentationRuntime PresentationTemplate;
 }

@@ -176,7 +176,7 @@ public class TestPlayController : MonoBehaviour
             throw new ArgumentException("機体・アニメーション・SPTを指定してください。", nameof(context));
         explicitContext = new TestPlayContext { Robo = context.Robo, Spt = context.Spt,
             Target = context.Target, Camera = context.Camera, ShowHud = context.ShowHud,
-            HudCanvas = context.HudCanvas };
+            HudCanvas = context.HudCanvas, PresentationTemplate = context.PresentationTemplate };
         robo = context.Robo;
         target = context.Target;
         cameraController = context.Camera;
@@ -802,6 +802,8 @@ public class TestPlayController : MonoBehaviour
             presentationRuntime = GetComponent<TestPlayPresentationRuntime>();
         if (presentationRuntime == null)
             presentationRuntime = gameObject.AddComponent<TestPlayPresentationRuntime>();
+        CopyPresentationTemplate(explicitContext != null ? explicitContext.PresentationTemplate : null);
+        presentationRuntime.PreloadMappedAudioAssets();
         presentationRuntime.Bind(this);
         presentationRuntime.AttachEmitters(robo != null && robo.root != null ? robo.root.transform : null);
 
@@ -829,6 +831,62 @@ public class TestPlayController : MonoBehaviour
     {
         if (sptSource != null && RuntimeSptData == null)
             sptSource.TryLoadSptRuntimeData();
+    }
+
+    void CopyPresentationTemplate(TestPlayPresentationRuntime template)
+    {
+        if (template == null || presentationRuntime == null || template == presentationRuntime)
+            return;
+
+        if (presentationRuntime.sounds == null || presentationRuntime.sounds.Count == 0)
+            presentationRuntime.sounds = CloneAudioBindings(template.sounds);
+        if (presentationRuntime.voices == null || presentationRuntime.voices.Count == 0)
+            presentationRuntime.voices = CloneAudioBindings(template.voices);
+        if (presentationRuntime.effects == null || presentationRuntime.effects.Count == 0)
+            presentationRuntime.effects = CloneEffectBindings(template.effects);
+        if (presentationRuntime.originalTextures == null || presentationRuntime.originalTextures.Count == 0)
+            presentationRuntime.originalTextures = CloneTextureBindings(template.originalTextures);
+        if (presentationRuntime.originalEffectShader == null)
+            presentationRuntime.originalEffectShader = template.originalEffectShader;
+        if (presentationRuntime.propulsionStartClip == null)
+            presentationRuntime.propulsionStartClip = template.propulsionStartClip;
+        if (presentationRuntime.propulsionLoopClip == null)
+            presentationRuntime.propulsionLoopClip = template.propulsionLoopClip;
+    }
+
+    static List<TestPlayAudioBinding> CloneAudioBindings(List<TestPlayAudioBinding> source)
+    {
+        var result = new List<TestPlayAudioBinding>();
+        if (source == null)
+            return result;
+        foreach (TestPlayAudioBinding item in source)
+            if (item != null)
+                result.Add(new TestPlayAudioBinding { key = item.key, clip = item.clip, volume = item.volume });
+        return result;
+    }
+
+    static List<TestPlayEffectBinding> CloneEffectBindings(List<TestPlayEffectBinding> source)
+    {
+        var result = new List<TestPlayEffectBinding>();
+        if (source == null)
+            return result;
+        foreach (TestPlayEffectBinding item in source)
+            if (item != null)
+                result.Add(new TestPlayEffectBinding { key = item.key, prefab = item.prefab });
+        return result;
+    }
+
+    static List<TestPlayTextureBinding> CloneTextureBindings(List<TestPlayTextureBinding> source)
+    {
+        var result = new List<TestPlayTextureBinding>();
+        if (source == null)
+            return result;
+        foreach (TestPlayTextureBinding item in source)
+            if (item != null)
+                result.Add(new TestPlayTextureBinding {
+                    loadSequence = item.loadSequence, scriptTextureId = item.scriptTextureId,
+                    originalFileName = item.originalFileName, texture = item.texture });
+        return result;
     }
 
     public void StopTestPlay()
@@ -4489,6 +4547,19 @@ public class TestPlayController : MonoBehaviour
             source,
             attackFlag,
             TestPlayAttackCollisionKind.OriginalType1);
+
+        // Original EXE registers shot.wav as fixed Snd(0), but its type-1
+        // handler also emits a spatial sound directly after creating LZ_Beam.
+        // This is a Unity adapter pending a smaller primary-source proof: keep
+        // the fixed Snd(0) mapping rather than guessing another weapon sound.
+        RaisePresentationEvent(TestPlayPresentationCore.CreateSound(
+            new List<TestPlayScriptValue> { TestPlayScriptValue.Number(0f) },
+            presentationRuntime != null
+                ? presentationRuntime.ResolveAudioAdapter(TestPlayPresentationEventType.Sound, "0")
+                : TestPlayPresentationAdapterKind.None));
+        RaiseRuntimeEvent(TestPlayRuntimeEventType.Sound, "Snd", new List<TestPlayScriptValue> {
+            TestPlayScriptValue.Number(0f)
+        }, "0");
 
         GameObject go = presentationRuntime != null
             ? presentationRuntime.CreateMappedEffect(source, spawnPosition, spawnRotation)

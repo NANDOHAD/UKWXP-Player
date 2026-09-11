@@ -47,6 +47,33 @@ public class TestPlayPresentationRuntime : MonoBehaviour
     public bool useSpatialAudio = true;
     public float audioMaxDistance = 40f;
 
+    /// <summary>
+    /// Machine-readable mapping state used by the standalone acceptance run.
+    /// These counts describe Unity assets only; they are not an original-EXE parity claim.
+    /// </summary>
+    public int MappedAudioBindingCount => CountMappedAudioBindings(sounds) + CountMappedAudioBindings(voices);
+    public int MappedTextureBindingCount => CountMappedTextureBindings(originalTextures);
+    public int MissingAudioMappingCount => missingAudioKeys.Count;
+    public int MissingTextureMappingCount => missingTextureKeys.Count;
+    public int ConfiguredAudioSourceCount => CountConfiguredAudioSources();
+    public int ActiveAudioSourceCount => CountActiveAudioSources();
+    public bool AudioSourcesConfigured => soundSource != null && voiceSource != null &&
+        propulsionStartSource != null && propulsionSource != null &&
+        !soundSource.playOnAwake && !voiceSource.playOnAwake &&
+        !propulsionStartSource.playOnAwake && !propulsionSource.playOnAwake;
+    public bool OriginalEffectShaderConfigured => originalEffectShader != null && originalEffectShader.isSupported;
+    public bool PropulsionAudioClipsConfigured => propulsionStartClip != null && propulsionLoopClip != null;
+
+    public void PreloadMappedAudioAssets()
+    {
+        PreloadBindings(sounds);
+        PreloadBindings(voices);
+        if (propulsionStartClip != null && propulsionStartClip.loadState == AudioDataLoadState.Unloaded)
+            propulsionStartClip.LoadAudioData();
+        if (propulsionLoopClip != null && propulsionLoopClip.loadState == AudioDataLoadState.Unloaded)
+            propulsionLoopClip.LoadAudioData();
+    }
+
     [Header("Propulsion start + loop (Unity adapter)")]
     public AudioClip propulsionStartClip;
     [Range(0f, 1f)] public float propulsionStartVolume = 1f;
@@ -58,6 +85,11 @@ public class TestPlayPresentationRuntime : MonoBehaviour
     public bool PropulsionLoopRequested { get; private set; }
     public int PropulsionActivationCount { get; private set; }
     public int SuppressedSoundPlaybackCount { get; private set; }
+    /// <summary>Diagnostic count of successfully resolved one-shot sound bindings.</summary>
+    public int SoundPlaybackCount { get; private set; }
+    /// <summary>Last resolved sound key and clip, for Player-only audio troubleshooting.</summary>
+    public string LastSoundPlaybackKey { get; private set; } = "";
+    public string LastSoundPlaybackClip { get; private set; } = "";
 
     readonly HashSet<string> missingAudioKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     readonly HashSet<string> missingTextureKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -66,14 +98,7 @@ public class TestPlayPresentationRuntime : MonoBehaviour
     {
         EnsureAudioSources();
         if (preloadMappedAudio)
-        {
-            PreloadBindings(sounds);
-            PreloadBindings(voices);
-            if (propulsionStartClip != null && propulsionStartClip.loadState == AudioDataLoadState.Unloaded)
-                propulsionStartClip.LoadAudioData();
-            if (propulsionLoopClip != null && propulsionLoopClip.loadState == AudioDataLoadState.Unloaded)
-                propulsionLoopClip.LoadAudioData();
-        }
+            PreloadMappedAudioAssets();
         if (controller == null)
             controller = GetComponent<TestPlayController>();
     }
@@ -517,6 +542,10 @@ public class TestPlayPresentationRuntime : MonoBehaviour
         }
 
         source.PlayOneShot(binding.clip, Mathf.Clamp01(binding.volume));
+        SoundPlaybackCount++;
+        LastSoundPlaybackKey = key ?? "";
+        LastSoundPlaybackClip = binding.clip != null ? binding.clip.name : "";
+        Debug.Log("[TestPlay][Audio] Played " + command + ":" + LastSoundPlaybackKey + " clip=" + LastSoundPlaybackClip);
     }
 
     public static TestPlayAudioBinding FindBinding(List<TestPlayAudioBinding> bindings, string key)
@@ -559,6 +588,57 @@ public class TestPlayPresentationRuntime : MonoBehaviour
                 return binding;
         }
         return null;
+    }
+
+    int CountConfiguredAudioSources()
+    {
+        int count = 0;
+        if (soundSource != null && !soundSource.playOnAwake) count++;
+        if (voiceSource != null && !voiceSource.playOnAwake) count++;
+        if (propulsionStartSource != null && !propulsionStartSource.playOnAwake) count++;
+        if (propulsionSource != null && !propulsionSource.playOnAwake) count++;
+        return count;
+    }
+
+    int CountActiveAudioSources()
+    {
+        int count = 0;
+        if (soundSource != null && soundSource.isPlaying) count++;
+        if (voiceSource != null && voiceSource.isPlaying) count++;
+        if (propulsionStartSource != null && propulsionStartSource.isPlaying) count++;
+        if (propulsionSource != null && propulsionSource.isPlaying) count++;
+        return count;
+    }
+
+    static int CountMappedAudioBindings(List<TestPlayAudioBinding> bindings)
+    {
+        if (bindings == null)
+            return 0;
+
+        int count = 0;
+        for (int i = 0; i < bindings.Count; i++)
+        {
+            TestPlayAudioBinding binding = bindings[i];
+            if (binding != null && !string.IsNullOrWhiteSpace(binding.key) && binding.clip != null)
+                count++;
+        }
+        return count;
+    }
+
+    static int CountMappedTextureBindings(List<TestPlayTextureBinding> bindings)
+    {
+        if (bindings == null)
+            return 0;
+
+        int count = 0;
+        for (int i = 0; i < bindings.Count; i++)
+        {
+            TestPlayTextureBinding binding = bindings[i];
+            if (binding != null && binding.texture != null &&
+                (binding.scriptTextureId >= 0 || !string.IsNullOrWhiteSpace(binding.originalFileName)))
+                count++;
+        }
+        return count;
     }
 
     static void PreloadBindings(List<TestPlayAudioBinding> bindings)

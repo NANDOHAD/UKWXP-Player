@@ -482,7 +482,7 @@ MonoBehaviour:
   preloadMappedAudio: 1
   useSpatialAudio: 1
   audioMaxDistance: 40
-  propulsionStartClip: {fileID: 0}
+  propulsionStartClip: {fileID: 8300000, guid: f1ff456c8835a404caeb1deb32742520, type: 3}
   propulsionStartVolume: 1
   propulsionLoopClip: {fileID: 8300000, guid: 6b947df89c0a30540b3f61da6404f3f5, type: 3}
   propulsionLoopVolume: 1
@@ -506,6 +506,10 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 0}
     m_Modifications:
+    - target: {fileID: 3701772494368085500, guid: c0add7616637cfc4da58cea68c26831e, type: 3}
+      propertyPath: m_Text
+      value: 
+      objectReference: {fileID: 0}
     - target: {fileID: 3942303216897108073, guid: c0add7616637cfc4da58cea68c26831e, type: 3}
       propertyPath: m_Pivot.x
       value: 0
@@ -586,6 +590,18 @@ PrefabInstance:
       propertyPath: m_LocalEulerAnglesHint.z
       value: 0
       objectReference: {fileID: 0}
+    - target: {fileID: 5389190003948247025, guid: c0add7616637cfc4da58cea68c26831e, type: 3}
+      propertyPath: m_Color.b
+      value: 0.882353
+      objectReference: {fileID: 0}
+    - target: {fileID: 5389190003948247025, guid: c0add7616637cfc4da58cea68c26831e, type: 3}
+      propertyPath: m_Color.g
+      value: 0.4117647
+      objectReference: {fileID: 0}
+    - target: {fileID: 5389190003948247025, guid: c0add7616637cfc4da58cea68c26831e, type: 3}
+      propertyPath: m_Color.r
+      value: 0.254902
+      objectReference: {fileID: 0}
     - target: {fileID: 8585623794078082746, guid: c0add7616637cfc4da58cea68c26831e, type: 3}
       propertyPath: m_Name
       value: TestPlayHUDCanvas
@@ -600,6 +616,67 @@ GameObject:
   m_CorrespondingSourceObject: {fileID: 8585623794078082746, guid: c0add7616637cfc4da58cea68c26831e, type: 3}
   m_PrefabInstance: {fileID: 756850676}
   m_PrefabAsset: {fileID: 0}
+--- !u!1001 &854404783
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 1636802027928739761, guid: cd9bd66e0c54926418c2bd6386ecd6ce, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 1636802027928739761, guid: cd9bd66e0c54926418c2bd6386ecd6ce, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 1636802027928739761, guid: cd9bd66e0c54926418c2bd6386ecd6ce, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 1636802027928739761, guid: cd9bd66e0c54926418c2bd6386ecd6ce, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 1636802027928739761, guid: cd9bd66e0c54926418c2bd6386ecd6ce, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 1636802027928739761, guid: cd9bd66e0c54926418c2bd6386ecd6ce, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 1636802027928739761, guid: cd9bd66e0c54926418c2bd6386ecd6ce, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 1636802027928739761, guid: cd9bd66e0c54926418c2bd6386ecd6ce, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 1636802027928739761, guid: cd9bd66e0c54926418c2bd6386ecd6ce, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 1636802027928739761, guid: cd9bd66e0c54926418c2bd6386ecd6ce, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 3353039763703788731, guid: cd9bd66e0c54926418c2bd6386ecd6ce, type: 3}
+      propertyPath: m_Name
+      value: StandaloneGround
+      objectReference: {fileID: 0}
+    - target: {fileID: 4383746951876173371, guid: cd9bd66e0c54926418c2bd6386ecd6ce, type: 3}
+      propertyPath: 'm_Materials.Array.data[0]'
+      value: 
+      objectReference: {fileID: 2100000, guid: 68a16d3a63926304d9091fd65f57e068, type: 2}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: cd9bd66e0c54926418c2bd6386ecd6ce, type: 3}
 --- !u!224 &988158698 stripped
 RectTransform:
   m_CorrespondingSourceObject: {fileID: 8600324348691649354, guid: c0add7616637cfc4da58cea68c26831e, type: 3}
@@ -926,7 +1003,7 @@ MonoBehaviour:
   preloadMappedAudio: 1
   useSpatialAudio: 1
   audioMaxDistance: 40
-  propulsionStartClip: {fileID: 0}
+  propulsionStartClip: {fileID: 8300000, guid: f1ff456c8835a404caeb1deb32742520, type: 3}
   propulsionStartVolume: 1
   propulsionLoopClip: {fileID: 8300000, guid: 6b947df89c0a30540b3f61da6404f3f5, type: 3}
   propulsionLoopVolume: 1
@@ -962,6 +1039,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::TestPlaySessionBootstrap
   gameCamera: {fileID: 0}
   hudCanvas: {fileID: 756850677}
+  presentationTemplate: {fileID: 329767408}
   playerSlot: {fileID: 329767406}
   opponentSlot: {fileID: 1313678413}
 --- !u!4 &1657198409
@@ -1063,3 +1141,4 @@ SceneRoots:
   - {fileID: 1915056787}
   - {fileID: 756850676}
   - {fileID: 1657198409}
+  - {fileID: 854404783}

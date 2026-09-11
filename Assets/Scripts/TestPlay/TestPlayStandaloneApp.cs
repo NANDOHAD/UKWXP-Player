@@ -21,9 +21,16 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
 
     string mechsRoot = "";
     readonly List<string> mechNames = new List<string>();
+    // フォルダ名 → charaselect.sdt 1行目の表示名（なければフォルダ名をフォールバック）
+    readonly Dictionary<string, string> mechDisplayNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string, Texture2D> selectionImages = new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
     int firstIndex, secondIndex;
     bool sameOpponent = true;
-    Vector2 mechScroll;
+    // ドロップダウンの開閉状態
+    bool firstDropdownOpen, secondDropdownOpen;
+    Vector2 firstDropdownScroll, secondDropdownScroll;
+    // フォルダパス欄の折りたたみ状態
+    bool folderFoldout = false;
     string message = "機体フォルダから自機と相手機を選んでください。";
     string cliFirst = "", cliSecond = "";
     TestPlaySessionBootstrap host;
@@ -47,6 +54,18 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         if (hudCanvas != null) host.hudCanvas = hudCanvas;
         if (playerSlot != null && host.playerSlot == null) host.playerSlot = playerSlot;
         if (opponentSlot != null && host.opponentSlot == null) host.opponentSlot = opponentSlot;
+        if (host.presentationTemplate == null)
+        {
+            TestPlayMechSlot mappingSlot = playerSlot != null ? playerSlot : host.playerSlot;
+            if (mappingSlot != null)
+                host.presentationTemplate = mappingSlot.GetComponent<TestPlayPresentationRuntime>();
+        }
+        if (host.presentationTemplate == null)
+        {
+            GameObject canvas = hudCanvas != null ? hudCanvas : host.hudCanvas;
+            if (canvas != null)
+                host.presentationTemplate = canvas.GetComponentInChildren<TestPlayPresentationRuntime>(true);
+        }
         font = Font.CreateDynamicFontFromOSFont(new[] { "Meiryo", "Yu Gothic", "Arial" }, 16);
         mechsRoot = Argument("--mechs-folder") ?? DefaultMechsRoot();
         cliFirst = Argument("--mech") ?? "";
@@ -66,7 +85,8 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
             if (verifying)
             {
                 Debug.Log("[Standalone Player] Lifecycle verification started");
-                var report = await TestPlaySessionLifecycleVerification.RunAsync(cliFirst, output, gameCamera);
+                var report = await TestPlaySessionLifecycleVerification.RunAsync(
+                    cliFirst, output, gameCamera, default, host.presentationTemplate);
                 Debug.Log("[Standalone Player] " + JsonUtility.ToJson(report));
                 if (!Application.isEditor) Application.Quit(0);
             }
@@ -117,41 +137,75 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
 
     async Task DrawMainUi()
     {
-        GUILayout.BeginArea(new Rect(15, 15, 680, 520), GUI.skin.box);
-        GUILayout.Label("独立テストプレイ / " + DisplayStatus(host.Status));
+        GUILayout.BeginArea(new Rect(15, 15, 720, 560), GUI.skin.box);
+
+        // ── タイトルと状態 ──────────────────────────────────
+        GUILayout.Label("Ultimate Knight ウィンダムXP MODプレイヤー");
+        GUILayout.Label("状態: " + DisplayStatus(host.Status));
+        GUILayout.Space(4);
+
+        // ── フォルダパス（折りたたみ） ────────────────────────
         bool editable = !busy;
         GUI.enabled = editable;
+        folderFoldout = GUILayout.Toggle(folderFoldout, "▶ Roboフォルダパス", GUI.skin.button);
+        if (folderFoldout)
+        {
+            GUILayout.BeginHorizontal();
+            mechsRoot = GUILayout.TextField(mechsRoot);
+            GUILayout.EndHorizontal();
+        }
+        bool refresh = GUILayout.Button("フォルダ内の機体を再読込み");
+        GUILayout.Space(4);
 
-        GUILayout.Label("機体ルートフォルダ（UI_SelectMechと同じ構成）");
-        GUILayout.BeginHorizontal();
-        mechsRoot = GUILayout.TextField(mechsRoot);
-        bool refresh = GUILayout.Button("再読込", GUILayout.Width(80));
-        GUILayout.EndHorizontal();
-
+        // ── 機体選択（2カラム） ────────────────────────────────
         if (mechNames.Count == 0)
+        {
             GUILayout.Label("機体フォルダが見つかりません。ルートを確認して再読込してください。");
+        }
         else
         {
-            mechScroll = GUILayout.BeginScrollView(mechScroll, GUILayout.Height(220));
-            GUILayout.Label("自機");
-            firstIndex = GUILayout.SelectionGrid(firstIndex, mechNames.ToArray(), 1);
+            GUILayout.BeginHorizontal();
+
+            // 自機カラム
+            GUILayout.BeginVertical(GUI.skin.box, GUILayout.Width(330));
+            GUILayout.Label("【 自機 】");
+            bool firstChanged;
+            firstIndex = DrawMechDropdown(firstIndex, ref firstDropdownOpen, ref firstDropdownScroll,
+                "firstDropdown", out firstChanged);
+            if (firstChanged && firstDropdownOpen) secondDropdownOpen = false;
+            // ドロップダウン展開中はプレビューを隠す（リストの下にselect.pngが埋もれないよう）
+            if (!firstDropdownOpen) DrawMechPreview(SelectedName(firstIndex), 310, 160);
+            GUILayout.EndVertical();
+
             GUILayout.Space(8);
-            sameOpponent = GUILayout.Toggle(sameOpponent, "相手機は自機と同じ");
-            if (!sameOpponent)
-            {
-                GUILayout.Label("相手機");
-                secondIndex = GUILayout.SelectionGrid(secondIndex, mechNames.ToArray(), 1);
-            }
-            GUILayout.EndScrollView();
+
+            // 相手機カラム
+            GUILayout.BeginVertical(GUI.skin.box, GUILayout.Width(330));
+            GUILayout.Label("【 相手機 】");
+
+            bool secondChanged;
+            secondIndex = DrawMechDropdown(secondIndex, ref secondDropdownOpen, ref secondDropdownScroll,
+                "secondDropdown", out secondChanged);
+            if (secondChanged && secondDropdownOpen) firstDropdownOpen = false;
+            // ドロップダウン展開中はプレビューを隠す（リストの下にselect.pngが埋もれないよう）
+            if (!secondDropdownOpen) DrawMechPreview(SelectedName(secondIndex), 310, 160);
+
+            GUILayout.EndVertical();
+
+            GUILayout.EndHorizontal();
         }
 
+        GUILayout.Space(4);
+
+        // ── 操作ボタン行 ──────────────────────────────────────
         GUILayout.BeginHorizontal();
-        bool start = GUILayout.Button("開始");
+        bool start = GUILayout.Button("▶ 開始", GUILayout.Height(30));
         GUI.enabled = !quitting;
-        bool quit = GUILayout.Button("アプリを終了");
+        bool quit = GUILayout.Button("✕ アプリを終了", GUILayout.Height(30));
         GUI.enabled = true;
         GUILayout.EndHorizontal();
-        GUILayout.Label("矢印: 移動  Z: 上昇/ブースト  X: 射撃  C: 格闘  V: ガード  S: ロック  A/D/F: 必殺技");
+
+        GUILayout.Label("操作: 矢印=移動  Z=上昇/ブースト  X=射撃  C=格闘  V=ガード  S=ロック  A/D/F=必殺技");
         if (!string.IsNullOrEmpty(message)) GUILayout.Label(message);
         GUILayout.EndArea();
 
@@ -162,6 +216,8 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         }
         if (start)
         {
+            firstDropdownOpen = false;
+            secondDropdownOpen = false;
             try
             {
                 string firstPath = ResolveSelectedPath(firstIndex);
@@ -208,7 +264,11 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
     {
         string previousFirst = SelectedName(firstIndex);
         string previousSecond = SelectedName(secondIndex);
+        foreach (Texture2D image in selectionImages.Values)
+            if (image != null) Destroy(image);
+        selectionImages.Clear();
         mechNames.Clear();
+        mechDisplayNames.Clear();
         firstIndex = 0;
         secondIndex = 0;
 
@@ -231,7 +291,10 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
             string scriptAni = FindFileIgnoreCase(directory, "Script.ani");
             if (scriptAni == null || !IsAn2Container(scriptAni))
                 continue;
-            mechNames.Add(Path.GetFileName(directory));
+            string folderName = Path.GetFileName(directory);
+            mechNames.Add(folderName);
+            // charaselect.sdt の1行目を表示名として読む（なければフォルダ名をフォールバック）
+            mechDisplayNames[folderName] = ReadCharaSelectName(directory, folderName);
         }
         mechNames.Sort(StringComparer.OrdinalIgnoreCase);
 
@@ -244,6 +307,140 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         firstIndex = IndexOfName(previousFirst);
         secondIndex = IndexOfName(previousSecond);
         message = mechNames.Count + "機の機体フォルダを読み込みました。";
+    }
+
+    /// <summary>機体フォルダ内の charaselect.sdt 1行目を表示名として返す。ファイルがなければ folderName を返す。</summary>
+    static string ReadCharaSelectName(string directory, string folderName)
+    {
+        string sdtPath = FindFileIgnoreCase(directory, "charaselect.sdt");
+        if (sdtPath == null) return folderName;
+        try
+        {
+            // Shift-JIS（CP932）で読む
+            var encoding = System.Text.Encoding.GetEncoding(932);
+            using (var reader = new StreamReader(sdtPath, encoding))
+            {
+                string line = reader.ReadLine();
+                if (!string.IsNullOrWhiteSpace(line))
+                    return line.Trim();
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[Standalone Player] charaselect.sdtの読込に失敗しました: " + sdtPath + " / " + e.Message);
+        }
+        return folderName;
+    }
+
+    /// <summary>ドロップダウン形式の機体選択。展開/折りたたみと選択を管理する。</summary>
+    /// <param name="changed">このフレームにドロップダウン展開状態が変わったか</param>
+    int DrawMechDropdown(int index, ref bool open, ref Vector2 scroll, string controlName, out bool changed)
+    {
+        changed = false;
+        if (mechNames.Count == 0)
+            return 0;
+
+        // ドロップダウンボタン: charaselect.sdt由来の表示名を表示
+        string displayName = SelectedDisplayName(index);
+        if (GUILayout.Button(string.IsNullOrEmpty(displayName) ? "-- 選択してください --" : displayName))
+        {
+            open = !open;
+            changed = true;
+        }
+
+        if (!open)
+            return index;
+
+        // 展開時: スクロール付きリスト表示（表示名を使用）
+        scroll = GUILayout.BeginScrollView(scroll, GUILayout.Height(140));
+        for (int i = 0; i < mechNames.Count; i++)
+        {
+            bool isSelected = (i == index);
+            // 選択中は強調
+            var origColor = GUI.backgroundColor;
+            if (isSelected) GUI.backgroundColor = new Color(0.4f, 0.8f, 1f, 1f);
+            string label = GetDisplayName(mechNames[i]);
+            if (GUILayout.Button(label))
+            {
+                index = i;
+                open = false;
+                changed = true;
+            }
+            GUI.backgroundColor = origColor;
+        }
+        GUILayout.EndScrollView();
+        return index;
+    }
+
+    /// <summary>インデックスから表示名（charaselect.sdt 1行目 or フォルダ名）を返す。</summary>
+    string SelectedDisplayName(int index)
+    {
+        string folderName = SelectedName(index);
+        return GetDisplayName(folderName);
+    }
+
+    /// <summary>フォルダ名から表示名を引く。登録がなければフォルダ名をそのまま返す。</summary>
+    string GetDisplayName(string folderName)
+    {
+        if (string.IsNullOrEmpty(folderName)) return "";
+        string display;
+        return mechDisplayNames.TryGetValue(folderName, out display) ? display : folderName;
+    }
+
+    /// <summary>select.pngのプレビュー画像を指定サイズの枠内に描画する。</summary>
+    void DrawMechPreview(string mechName, float maxWidth, float maxHeight)
+    {
+        Texture2D preview = GetSelectionImage(mechName);
+        if (preview == null) return;
+        float aspect = (float)preview.width / Mathf.Max(1f, preview.height);
+        float w = Mathf.Min(maxWidth, maxHeight * aspect);
+        float h = w / aspect;
+        Rect rect = GUILayoutUtility.GetRect(w, h, GUILayout.ExpandWidth(false));
+        GUI.DrawTexture(rect, preview, ScaleMode.ScaleToFit, true);
+    }
+    
+
+    Texture2D GetSelectionImage(string mechName)
+    {
+        if (string.IsNullOrEmpty(mechName) || string.IsNullOrEmpty(mechsRoot))
+            return null;
+        if (selectionImages.TryGetValue(mechName, out Texture2D cached))
+            return cached;
+
+        string directory = Path.Combine(mechsRoot, mechName);
+        string selectPath = FindFileIgnoreCase(directory, "select.png");
+        if (selectPath == null)
+        {
+            selectionImages[mechName] = null;
+            return null;
+        }
+
+        try
+        {
+            CypherTranscoder transcoder = new CypherTranscoder();
+            if (!transcoder.findCypher(selectPath))
+            {
+                selectionImages[mechName] = null;
+                return null;
+            }
+            byte[] imageBytes = transcoder.Transcode(selectPath);
+            Texture2D texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            if (!texture.LoadImage(imageBytes, false))
+            {
+                Destroy(texture);
+                selectionImages[mechName] = null;
+                return null;
+            }
+            texture.name = mechName + "_select";
+            selectionImages[mechName] = texture;
+            return texture;
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[Standalone Player] select.pngの表示に失敗しました: " + selectPath + " / " + e.Message);
+            selectionImages[mechName] = null;
+            return null;
+        }
     }
 
     string SelectedName(int index)
@@ -334,5 +531,11 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         return sessionHost;
     }
 
-    void OnDestroy() { if (font != null) Destroy(font); }
+    void OnDestroy()
+    {
+        if (font != null) Destroy(font);
+        foreach (Texture2D image in selectionImages.Values)
+            if (image != null) Destroy(image);
+        selectionImages.Clear();
+    }
 }
