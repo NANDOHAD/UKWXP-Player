@@ -18,7 +18,8 @@ public enum TestPlayPresentationEvidence
     OriginalExecutableConfirmed,
     OriginalDataObserved,
     IncompleteInference,
-    Unknown
+    Unknown,
+    UnityAlternative
 }
 
 public enum TestPlayPresentationAdapterKind

@@ -51,6 +51,23 @@ public class TestPlayOriginalEffect : MonoBehaviour
         transform.localScale = new Vector3(displaySize.x, displaySize.y, 1f);
     }
 
+    public void SetSheetFrame(int columns, int rows, int frameIndex)
+    {
+        columns = Mathf.Max(1, columns);
+        rows = Mathf.Max(1, rows);
+        int frameCount = columns * rows;
+        frameIndex = Mathf.Clamp(frameIndex, 0, frameCount - 1);
+        int column = frameIndex % columns;
+        int rowFromTop = frameIndex / columns;
+        Vector2 scale = new Vector2(1f / columns, 1f / rows);
+        Vector2 offset = new Vector2(column * scale.x, 1f - ((rowFromTop + 1) * scale.y));
+        if (runtimeMaterial != null)
+        {
+            runtimeMaterial.SetTextureScale("_MainTex", scale);
+            runtimeMaterial.SetTextureOffset("_MainTex", offset);
+        }
+    }
+
     void LateUpdate()
     {
         if (billboard)

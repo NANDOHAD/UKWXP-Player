@@ -19,9 +19,16 @@ public class TestPlayController : MonoBehaviour
     public MechHandle SessionLockHandle => sessionLock;
     public bool SessionDefeated { get; private set; }
     public int SessionReactionState { get; private set; }
+    public TestPlaySessionReactionPhase SessionReactionPhase { get; private set; }
+    public int SessionAccumulatedDown { get; private set; }
     public Vector3 LastSessionImpactForce { get; private set; }
     public int LastSessionDownValue { get; private set; }
+    public TestPlayAttackCollisionKind LastSessionCollisionKind { get; private set; }
+    public bool SessionModelVisible { get; private set; } = true;
+    public int SessionHitEffectSpawnCount { get; private set; }
+    public int SessionDefeatEffectSpawnCount { get; private set; }
     bool sessionReactionActive;
+    int sessionReactionTicks;
     readonly List<TestPlayTargetSnapshot> sessionMeleeHits = new List<TestPlayTargetSnapshot>();
 
     internal TestPlayCombatHitResult ResolveSessionImpact(TestPlayCombatHitResult hit,
@@ -48,65 +55,169 @@ public class TestPlayController : MonoBehaviour
         if (hit.hitStopTicks > 0) sessionAnimationHitStopped = true;
         if (hit.decision != TestPlayCombatHitDecision.Damaged) return hit;
         currentHP = Mathf.Max(0, currentHP - Mathf.Max(0, hit.damage));
+        SpawnSessionHitEffect(melee, attackerPosition, snapshot);
         LastSessionImpactForce = hit.impactForce;
         LastSessionDownValue = hit.down;
+        LastSessionCollisionKind = hit.collisionKind;
+        TestPlaySessionReactionDecision reaction = TestPlayCombatCore.ResolveSessionReaction(
+            new TestPlaySessionReactionInput {
+                accumulatedDown = SessionAccumulatedDown,
+                incomingDown = hit.down,
+                reactionState = hit.reactionState,
+                hpAfter = currentHP,
+                airborne = airborneFlag
+            });
+        SessionAccumulatedDown = reaction.accumulatedDown;
+        velocity += hit.impactForce;
+        if (hit.impactForce.y > 0f) SetAirborneFlag(true);
         if (hit.clearLinkedTarget) ClearTargetLock();
         if (hit.forceFacingToAttacker && toAttacker.sqrMagnitude > 0.000001f)
             robo.root.transform.rotation = Quaternion.LookRotation(toAttacker, Vector3.up);
-        if (currentHP <= 0 || hit.reactionState != 0)
-            BeginSessionReaction(hit.reactionState, hit.down);
+        if (reaction.startsReaction)
+            BeginSessionReaction(hit.reactionState, reaction);
         return hit;
     }
 
-    void BeginSessionReaction(int reaction, int down)
+    void BeginSessionReaction(int reactionState, TestPlaySessionReactionDecision decision)
     {
-        SessionDefeated = currentHP <= 0;
-        SessionReactionState = SessionDefeated ? 6 : reaction;
+        SessionDefeated = decision.defeated;
+        if (sessionReactionActive && !SessionDefeated &&
+            (SessionReactionPhase == TestPlaySessionReactionPhase.Knockback ||
+             SessionReactionPhase == TestPlaySessionReactionPhase.Downed ||
+             SessionReactionPhase == TestPlaySessionReactionPhase.Recovering) &&
+            !decision.knockdown)
+            return;
+
+        SessionReactionState = SessionDefeated ? 6 : reactionState;
+        SessionReactionPhase = decision.phase;
         state.SetInt(156, SessionReactionState);
         sessionReactionActive = true;
+        sessionReactionTicks = 0;
         attackSequenceActive = false;
         landingSequenceActive = false;
         activeMeleeAttacks.Clear();
         if (SessionDefeated) ClearTargetLock();
         ClearHeldMotionState(true);
-        moveCommand = forceCommand = velocity = Vector3.zero;
+        moveCommand = forceCommand = Vector3.zero;
         hasPendingDrivenHorizontalVelocity = false;
+        gvEnable = true;
+        vFMulti = 1f;
         shieldGuard = 0;
         StopAllBurnerEffects();
-        // FUN_004ba1c0 selects 13/14 for medium down and 15 for large down/HP0.
-        // Recovery duration and terminal pose hold here are a minimal Unity adapter.
-        int action = SessionDefeated || down >= 401 || reaction == 3 ? 15 : airborneFlag ? 14 : 13;
+        bool hasPose = EnterSessionReactionAction(decision.actionId);
+        if (!hasPose && SessionReactionPhase == TestPlaySessionReactionPhase.Hit)
+            CompleteSessionReaction(false);
+    }
+
+    bool EnterSessionReactionAction(int action)
+    {
         var selection = ResolveActionSelection(action);
         bool hasPose = HasUsableAction(selection.poseActionId) &&
             robo.ani.animations[selection.poseActionId].frames?.Count > 0;
         if (hasPose) ChangeAnimation(selection, true);
-        else
-        {
-            HoldCurrentAnimationAtLastPose();
-            sessionReactionActive = SessionDefeated;
-            if (!SessionDefeated) { SessionReactionState = 0; state.SetInt(156, 0); ChangeAnimation(idleAction); }
-        }
+        else HoldCurrentAnimationAtLastPose();
+        return hasPose;
     }
 
     void TickSessionReactionPose()
     {
         if (sessionAnimationHitStopped || !sessionReactionActive) return;
-        // Pose-only adapter: reaction/death ANI cannot spawn attacks or re-enable input.
-        int count = currentAnimation?.frames?.Count ?? 0;
-        if (!animationPoseHeldAtEnd && count > 0)
+        sessionReactionTicks++;
+        actionTick++;
+        int duration = GetSessionReactionPhaseDuration();
+        if (currentAnimation != null && currentAnimation.frames != null && currentAnimation.frames.Count > 0)
         {
-            frameIndex = Mathf.Min(frameIndex + 1, count - 1);
-            frameTime = 0;
+            ApplyFiniteActionPoseProgress(duration);
             ApplyPose();
-            if (frameIndex >= count - 1) animationPoseHeldAtEnd = true;
         }
-        if (animationPoseHeldAtEnd && !SessionDefeated)
+
+        ApplySessionReactionMotion();
+
+        if (SessionReactionPhase == TestPlaySessionReactionPhase.Hit)
         {
-            sessionReactionActive = false;
-            SessionReactionState = 0;
-            state.SetInt(156, 0);
-            ChangeAnimation(idleAction);
+            if (sessionReactionTicks >= TestPlayCombatCore.OriginalHitReactionTicks)
+                CompleteSessionReaction(false);
+            return;
         }
+
+        if (SessionReactionPhase == TestPlaySessionReactionPhase.Knockback ||
+            SessionReactionPhase == TestPlaySessionReactionPhase.Defeated)
+        {
+            bool knockbackAction = CurrentActionSelection.logicalActionId == 15;
+            bool landed = (groundedFlag || (!airborneFlag && Mathf.Abs(velocity.y) <= 0.0001f))
+                && velocity.y <= 0f;
+            if (knockbackAction && sessionReactionTicks >= TestPlayCombatCore.OriginalKnockbackMinimumTicks &&
+                (landed || sessionReactionTicks >= 180))
+                EnterSessionDownedPose();
+            return;
+        }
+
+        if (SessionReactionPhase == TestPlaySessionReactionPhase.Downed &&
+            sessionReactionTicks >= TestPlayCombatCore.OriginalDownedTicks)
+        {
+            SessionReactionPhase = TestPlaySessionReactionPhase.Recovering;
+            sessionReactionTicks = 0;
+            SessionAccumulatedDown = 0;
+            if (!EnterSessionReactionAction(17)) CompleteSessionReaction(true);
+            return;
+        }
+
+        if (SessionReactionPhase == TestPlaySessionReactionPhase.Recovering &&
+            sessionReactionTicks >= TestPlayCombatCore.OriginalGetUpTicks)
+            CompleteSessionReaction(true);
+    }
+
+    int GetSessionReactionPhaseDuration()
+    {
+        if (SessionReactionPhase == TestPlaySessionReactionPhase.Hit)
+            return TestPlayCombatCore.OriginalHitReactionTicks;
+        if (SessionReactionPhase == TestPlaySessionReactionPhase.Downed)
+            return TestPlayCombatCore.OriginalDownedTicks;
+        if (SessionReactionPhase == TestPlaySessionReactionPhase.Recovering)
+            return TestPlayCombatCore.OriginalGetUpTicks;
+        return TestPlayCombatCore.OriginalKnockbackMinimumTicks;
+    }
+
+    void ApplySessionReactionMotion()
+    {
+        if (robo == null || robo.root == null) return;
+        IntegrateOriginalForceVelocity();
+        Vector3 requestedMove = velocity * Mathf.Max(0f, aniUnitsToUnityScale);
+        MoveRootWithColliderGrounding(robo.root.transform, requestedMove);
+    }
+
+    void EnterSessionDownedPose()
+    {
+        velocity = Vector3.zero;
+        verticalFallSpeed = 0f;
+        SetAirborneFlag(false);
+        groundedFlag = true;
+        sessionReactionTicks = 0;
+        if (SessionDefeated)
+        {
+            SessionReactionPhase = TestPlaySessionReactionPhase.Defeated;
+            EnterSessionReactionAction(16);
+            BeginSessionDefeatPresentation();
+            return;
+        }
+
+        SessionReactionPhase = TestPlaySessionReactionPhase.Downed;
+        if (!EnterSessionReactionAction(16))
+        {
+            SessionReactionPhase = TestPlaySessionReactionPhase.Recovering;
+            if (!EnterSessionReactionAction(17)) CompleteSessionReaction(true);
+        }
+    }
+
+    void CompleteSessionReaction(bool resetDown)
+    {
+        sessionReactionActive = false;
+        sessionReactionTicks = 0;
+        SessionReactionState = 0;
+        SessionReactionPhase = TestPlaySessionReactionPhase.None;
+        if (resetDown) SessionAccumulatedDown = 0;
+        state.SetInt(156, 0);
+        ChangeAnimation(airborneFlag ? airIdleAction : idleAction);
     }
 
     internal void AttachSession(GameSession owner, MechHandle handle)
@@ -536,6 +647,19 @@ public class TestPlayController : MonoBehaviour
     readonly HashSet<int> validBurnerIds = new HashSet<int>();
     readonly Dictionary<int, TestPlayBurnerCone> burnerCones = new Dictionary<int, TestPlayBurnerCone>();
     readonly List<GameObject> spawnedTransientObjects = new List<GameObject>();
+    readonly List<ActiveSessionCombatEffect> activeSessionCombatEffects = new List<ActiveSessionCombatEffect>();
+    readonly List<Renderer> sessionHiddenModelRenderers = new List<Renderer>();
+    readonly List<bool> sessionHiddenModelRendererStates = new List<bool>();
+    const int SessionHitEffectTicks = 12;
+    static readonly Vector3[] SessionDefeatSmokeOffsets =
+    {
+        new Vector3(-0.42f, 0.08f, 0.08f),
+        new Vector3(0.36f, 0.18f, -0.12f),
+        new Vector3(-0.18f, 0.48f, -0.05f),
+        new Vector3(0.12f, -0.36f, 0.1f),
+        new Vector3(0.48f, -0.08f, 0.04f),
+        new Vector3(-0.34f, -0.28f, -0.08f)
+    };
     static readonly Vector3[] DeterministicWindLineOffsets =
     {
         new Vector3(-1.2f, 0.45f, -0.75f),
@@ -640,6 +764,18 @@ public class TestPlayController : MonoBehaviour
         public Vector3 visualBaseScale;
     }
 
+    sealed class ActiveSessionCombatEffect
+    {
+        public GameObject visualRoot;
+        public TestPlayOriginalEffect[] textureLayers;
+        public Vector2[] baseSizes;
+        public Color[] baseTints;
+        public Vector3 baseScale;
+        public int elapsedTicks;
+        public int totalTicks;
+        public bool defeat;
+    }
+
     sealed class ActiveWindRingSpecialEffect
     {
         public TestPlayWindRingSpecialParameters parameters;
@@ -734,15 +870,29 @@ public class TestPlayController : MonoBehaviour
         BeginCombatTraceTick();
         BeginPresentationTraceTick();
         groundRecoveryCompletedThisTick = false;
+        TickSessionCombatEffects();
         bool animationHitStopped = session != null ? sessionAnimationHitStopped : UpdateOriginalCombatTimers();
         if (session != null && (currentHP <= 0 || sessionReactionActive || SessionDefeated))
         {
-            if (currentHP <= 0 && !SessionDefeated) BeginSessionReaction(3, 401);
+            if (currentHP <= 0 && !SessionDefeated)
+            {
+                TestPlaySessionReactionDecision defeat = TestPlayCombatCore.ResolveSessionReaction(
+                    new TestPlaySessionReactionInput {
+                        accumulatedDown = SessionAccumulatedDown,
+                        incomingDown = 0,
+                        reactionState = 3,
+                        hpAfter = currentHP,
+                        airborne = airborneFlag
+                    });
+                BeginSessionReaction(3, defeat);
+            }
             TickSessionReactionPose();
             ConsumeLatchedInput();
             simulatingCombatTick = simulatingPresentationTick = false;
             return;
         }
+        if (session != null)
+            SessionAccumulatedDown = TestPlayCombatCore.TickAccumulatedDown(SessionAccumulatedDown);
         UpdateOriginalAttackCooldowns();
         UpdateInputState();
         UpdateTargetLock();
@@ -908,6 +1058,16 @@ public class TestPlayController : MonoBehaviour
         hudRuntime?.HideHud();
         activeMeleeAttacks.Clear();
         DestroyTransientObjects();
+        RestoreSessionModelVisibility();
+    }
+
+    void OnDestroy()
+    {
+        // Focused EditMode fixtures may destroy a controller directly instead of
+        // reaching StopTestPlay. Combat effects are intentionally unparented so
+        // they survive model hiding; release that owned state here as well.
+        DestroyTransientObjects();
+        RestoreSessionModelVisibility();
     }
 
     void EnsureHudRuntime()
@@ -2460,6 +2620,8 @@ public class TestPlayController : MonoBehaviour
 
     bool ShouldForceAirborneByAction()
     {
+        if (sessionReactionActive && velocity.y > 0f)
+            return true;
         if (IsCurrentAction(boostAction) && boostMotionActive)
             return true;
         if ((IsCurrentAction(riseStartAction) || IsCurrentAction(riseAction)) && riseSequenceActive)
@@ -4552,11 +4714,15 @@ public class TestPlayController : MonoBehaviour
         // handler also emits a spatial sound directly after creating LZ_Beam.
         // This is a Unity adapter pending a smaller primary-source proof: keep
         // the fixed Snd(0) mapping rather than guessing another weapon sound.
-        RaisePresentationEvent(TestPlayPresentationCore.CreateSound(
+        var shotSound = TestPlayPresentationCore.CreateSound(
             new List<TestPlayScriptValue> { TestPlayScriptValue.Number(0f) },
             presentationRuntime != null
                 ? presentationRuntime.ResolveAudioAdapter(TestPlayPresentationEventType.Sound, "0")
-                : TestPlayPresentationAdapterKind.None));
+                : TestPlayPresentationAdapterKind.None);
+        shotSound.evidence = TestPlayPresentationEvidence.UnityAlternative;
+        shotSound.source = "Type1Projectile";
+        shotSound.diagnostic = "Unity adapter: type-1 launch uses Snd(0); original spatial sound identity is unconfirmed.";
+        RaisePresentationEvent(shotSound);
         RaiseRuntimeEvent(TestPlayRuntimeEventType.Sound, "Snd", new List<TestPlayScriptValue> {
             TestPlayScriptValue.Number(0f)
         }, "0");
@@ -4773,6 +4939,337 @@ public class TestPlayController : MonoBehaviour
                 hit.attackerGuardReactionTicks);
         if (hit.applyAttackerGuardRecoil && target != null)
             velocity += target.transform.forward * 0.05f;
+    }
+
+    void SpawnSessionHitEffect(bool melee, Vector3 attackerPosition, TestPlayTargetSnapshot snapshot)
+    {
+        if (presentationRuntime == null || robo == null || robo.root == null)
+            return;
+
+        string key = melee ? "CombatHit:Melee" : "CombatHit:Shot";
+        string textureName = melee ? "explode2.png" : "beamHit3.png";
+        Vector3 center;
+        float modelRadius;
+        GetSessionPresentationBounds(snapshot.Position, snapshot.Radius, out center, out modelRadius);
+        Vector3 towardSource = attackerPosition - center;
+        if (towardSource.sqrMagnitude < 0.000001f)
+            towardSource = -(snapshot.Rotation * Vector3.forward);
+        Vector3 position = center + towardSource.normalized * Mathf.Min(modelRadius * 0.45f, 1.2f);
+        float size = Mathf.Clamp(modelRadius * (melee ? 1.15f : 0.8f), 0.6f, 2.5f);
+
+        GameObject root = presentationRuntime.CreateMappedEffect(key, position, Quaternion.identity);
+        TestPlayPresentationAdapterKind adapter = root != null
+            ? TestPlayPresentationAdapterKind.MappedPrefab
+            : TestPlayPresentationAdapterKind.None;
+        if (root == null)
+        {
+            root = new GameObject("TestPlaySessionHitEffect_" + (melee ? "Melee" : "Shot"));
+            root.transform.position = position;
+            GameObject layer = presentationRuntime.CreateOriginalNamedTextureEffect(
+                textureName,
+                position,
+                Quaternion.identity,
+                Vector2.one * size,
+                0f,
+                Color.white);
+            if (layer == null)
+            {
+                DestroyRuntimeObject(root);
+                root = CreateSessionPrimitiveEffect(position, size, "TestPlaySessionHitFallback");
+                adapter = TestPlayPresentationAdapterKind.PrimitiveFallback;
+            }
+            else
+            {
+                layer.transform.SetParent(root.transform, true);
+                adapter = TestPlayPresentationAdapterKind.OriginalTextureQuad;
+            }
+        }
+
+        RegisterSessionCombatEffect(root, SessionHitEffectTicks, false);
+        SessionHitEffectSpawnCount++;
+        RaisePresentationEvent(TestPlayPresentationCore.CreateVisual(
+            key,
+            -1,
+            adapter,
+            TestPlayPresentationEvidence.UnityAlternative,
+            "OriginalHitEffectSelectionUnknown;UnityImpactPointApproximation"));
+        RaiseRuntimeEvent(TestPlayRuntimeEventType.EffectSpawned, key, null, textureName, 0,
+            SessionHitEffectTicks / 60f);
+    }
+
+    void BeginSessionDefeatPresentation()
+    {
+        if (SessionDefeatEffectSpawnCount > 0 || presentationRuntime == null ||
+            robo == null || robo.root == null)
+            return;
+
+        Vector3 center;
+        float modelRadius;
+        GetSessionPresentationBounds(
+            robo.root.transform.position,
+            Mathf.Max(0.7f, characterControllerRadius),
+            out center,
+            out modelRadius);
+        const string key = "CombatDefeat";
+        GameObject root = presentationRuntime.CreateMappedEffect(key, center, Quaternion.identity);
+        TestPlayPresentationAdapterKind adapter = root != null
+            ? TestPlayPresentationAdapterKind.MappedPrefab
+            : TestPlayPresentationAdapterKind.None;
+        if (root == null)
+        {
+            root = new GameObject("TestPlaySessionDefeatEffect");
+            root.transform.position = center;
+            // User-directed 2026-09-14 tuning: the first pass read smaller than
+            // the original game, so double the complete defeat explosion stack.
+            float size = Mathf.Clamp(modelRadius * 1.45f, 1.8f, 6f) * 2f;
+            bool created = AddSessionTextureLayer(root.transform, "explode2.png", center,
+                Vector2.one * size, Color.white);
+            created |= AddSessionTextureLayer(root.transform, "explode1.png", center + Vector3.back * 0.015f,
+                Vector2.one * (size * 0.72f), new Color(1f, 0.88f, 0.62f, 1f));
+            for (int i = 0; i < SessionDefeatSmokeOffsets.Length; i++)
+            {
+                Vector3 offset = SessionDefeatSmokeOffsets[i] * modelRadius;
+                created |= AddSessionTextureLayer(root.transform, "GSmoke.png", center + offset,
+                    Vector2.one * (size * 0.38f), new Color(0.85f, 0.85f, 0.85f, 0.86f));
+            }
+            if (!created)
+            {
+                DestroyRuntimeObject(root);
+                root = CreateSessionPrimitiveEffect(center, size, "TestPlaySessionDefeatFallback");
+                adapter = TestPlayPresentationAdapterKind.PrimitiveFallback;
+            }
+            else
+                adapter = TestPlayPresentationAdapterKind.OriginalTextureQuad;
+        }
+
+        RegisterSessionCombatEffect(root, TestPlayCombatCore.OriginalDefeatPresentationTicks, true);
+        SessionDefeatEffectSpawnCount++;
+        RaisePresentationEvent(TestPlayPresentationCore.CreateVisual(
+            key,
+            -1,
+            adapter,
+            TestPlayPresentationEvidence.UnityAlternative,
+            "OriginalAction16SmokeAnd60TickTransition;UnityLayerComposition"));
+        RaiseRuntimeEvent(TestPlayRuntimeEventType.EffectSpawned, key, null, "explode1/explode2/GSmoke", 0,
+            TestPlayCombatCore.OriginalDefeatPresentationTicks / 60f);
+    }
+
+    bool AddSessionTextureLayer(Transform parent, string textureName, Vector3 position,
+        Vector2 size, Color tint)
+    {
+        GameObject layer = presentationRuntime.CreateOriginalNamedTextureEffect(
+            textureName, position, Quaternion.identity, size, 0f, tint);
+        if (layer == null)
+            return false;
+        layer.name = "TestPlaySessionEffectLayer_" + textureName;
+        layer.transform.SetParent(parent, true);
+        return true;
+    }
+
+    GameObject CreateSessionPrimitiveEffect(Vector3 position, float size, string name)
+    {
+        GameObject fallback = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        fallback.name = name;
+        fallback.transform.position = position;
+        fallback.transform.localScale = Vector3.one * Mathf.Max(0.1f, size);
+        Collider collider = fallback.GetComponent<Collider>();
+        if (collider != null)
+            DestroyRuntimeObject(collider);
+        return fallback;
+    }
+
+    void RegisterSessionCombatEffect(GameObject root, int totalTicks, bool defeat)
+    {
+        if (root == null)
+            return;
+        // Keep the effect independent from robo.root renderers, but owned by the
+        // controller host so direct fixture/controller destruction cannot orphan it.
+        if (root.transform.parent == null)
+            root.transform.SetParent(transform, true);
+        root.name = defeat ? "TestPlayEffect_CombatDefeat" : root.name;
+        TestPlayOriginalEffect[] layers = root.GetComponentsInChildren<TestPlayOriginalEffect>(true);
+        var baseSizes = new Vector2[layers.Length];
+        var baseTints = new Color[layers.Length];
+        for (int i = 0; i < layers.Length; i++)
+        {
+            baseSizes[i] = layers[i].displaySize;
+            baseTints[i] = layers[i].CurrentTint;
+            SetSessionCombatSheetFrame(layers[i], 0f);
+        }
+        activeSessionCombatEffects.Add(new ActiveSessionCombatEffect
+        {
+            visualRoot = root,
+            textureLayers = layers,
+            baseSizes = baseSizes,
+            baseTints = baseTints,
+            baseScale = root.transform.localScale,
+            elapsedTicks = 0,
+            totalTicks = Mathf.Max(1, totalTicks),
+            defeat = defeat
+        });
+        spawnedTransientObjects.Add(root);
+    }
+
+    void TickSessionCombatEffects()
+    {
+        for (int i = activeSessionCombatEffects.Count - 1; i >= 0; i--)
+        {
+            ActiveSessionCombatEffect active = activeSessionCombatEffects[i];
+            if (active == null || active.visualRoot == null)
+            {
+                activeSessionCombatEffects.RemoveAt(i);
+                continue;
+            }
+
+            active.elapsedTicks++;
+            float progress = Mathf.Clamp01(active.elapsedTicks / (float)active.totalTicks);
+            float growth = active.defeat
+                ? Mathf.Lerp(0.72f, 1.9f, Mathf.Sqrt(progress))
+                : Mathf.Lerp(0.8f, 1.35f, progress);
+            float alpha = active.defeat
+                ? 1f - Mathf.Clamp01((progress - 0.35f) / 0.65f)
+                : 1f - progress;
+            if (active.textureLayers != null)
+            {
+                for (int layerIndex = 0; layerIndex < active.textureLayers.Length; layerIndex++)
+                {
+                    TestPlayOriginalEffect layer = active.textureLayers[layerIndex];
+                    if (layer == null)
+                        continue;
+                    Vector2 baseSize = layerIndex < active.baseSizes.Length
+                        ? active.baseSizes[layerIndex]
+                        : layer.displaySize;
+                    layer.SetDisplaySize(baseSize * growth);
+                    SetSessionCombatSheetFrame(layer, progress);
+                    Color tint = layerIndex < active.baseTints.Length
+                        ? active.baseTints[layerIndex]
+                        : layer.CurrentTint;
+                    tint.a *= alpha;
+                    layer.SetTint(tint);
+                }
+            }
+            else
+            {
+                active.visualRoot.transform.localScale = active.baseScale * growth;
+            }
+
+            if (active.elapsedTicks >= active.totalTicks)
+                RemoveSessionCombatEffectAt(i, active.defeat);
+        }
+    }
+
+    static void SetSessionCombatSheetFrame(TestPlayOriginalEffect layer, float progress)
+    {
+        if (layer == null || layer.sourceTexture == null)
+            return;
+        string textureName = layer.sourceTexture.name;
+        if (!textureName.EndsWith("explode1") && !textureName.EndsWith("explode2"))
+            return;
+        const int columns = 8;
+        const int rows = 8;
+        int frame = Mathf.Clamp(
+            Mathf.FloorToInt(Mathf.Clamp01(progress) * columns * rows),
+            0,
+            columns * rows - 1);
+        layer.SetSheetFrame(columns, rows, frame);
+    }
+
+    void RemoveSessionCombatEffectAt(int index, bool hideModelAfter)
+    {
+        ActiveSessionCombatEffect active = activeSessionCombatEffects[index];
+        activeSessionCombatEffects.RemoveAt(index);
+        GameObject root = active != null ? active.visualRoot : null;
+        if (root != null)
+        {
+            spawnedTransientObjects.Remove(root);
+            DestroyRuntimeObject(root);
+        }
+        if (hideModelAfter)
+            HideSessionModel();
+    }
+
+    void GetSessionPresentationBounds(Vector3 rootPosition, float snapshotRadius,
+        out Vector3 center, out float radius)
+    {
+        center = rootPosition + Vector3.up * Mathf.Max(0.7f, snapshotRadius);
+        radius = Mathf.Max(0.7f, snapshotRadius);
+        if (robo == null || robo.root == null)
+            return;
+
+        // Some defeat poses move an individual part far away from the visible body.
+        // Keep presentation effects centered on the body cluster instead of allowing
+        // that animation outlier to enlarge and displace the combined renderer bounds.
+        Vector3 expectedCenter = center;
+        float maximumCenterDistance = Mathf.Max(2.5f, radius * 3f);
+        Renderer[] renderers = robo.root.GetComponentsInChildren<Renderer>(true);
+        bool found = false;
+        Bounds bounds = default;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Renderer renderer = renderers[i];
+            if (renderer == null || renderer.GetComponent<TestPlayOriginalEffect>() != null)
+                continue;
+            if ((renderer.bounds.center - expectedCenter).sqrMagnitude >
+                maximumCenterDistance * maximumCenterDistance)
+                continue;
+            if (!found)
+            {
+                bounds = renderer.bounds;
+                found = true;
+            }
+            else
+                bounds.Encapsulate(renderer.bounds);
+        }
+        if (!found)
+            return;
+        center = bounds.center;
+        radius = Mathf.Clamp(
+            Mathf.Max(radius, bounds.extents.magnitude * 0.55f),
+            radius,
+            Mathf.Max(1.5f, radius * 2.25f));
+    }
+
+    void HideSessionModel()
+    {
+        if (!SessionModelVisible || robo == null || robo.root == null)
+            return;
+        sessionHiddenModelRenderers.Clear();
+        sessionHiddenModelRendererStates.Clear();
+        Renderer[] renderers = robo.root.GetComponentsInChildren<Renderer>(true);
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Renderer renderer = renderers[i];
+            if (renderer == null || renderer.GetComponent<TestPlayOriginalEffect>() != null)
+                continue;
+            sessionHiddenModelRenderers.Add(renderer);
+            sessionHiddenModelRendererStates.Add(renderer.enabled);
+            renderer.enabled = false;
+        }
+        SessionModelVisible = false;
+    }
+
+    void RestoreSessionModelVisibility()
+    {
+        for (int i = 0; i < sessionHiddenModelRenderers.Count; i++)
+        {
+            Renderer renderer = sessionHiddenModelRenderers[i];
+            if (renderer != null)
+                renderer.enabled = i < sessionHiddenModelRendererStates.Count &&
+                    sessionHiddenModelRendererStates[i];
+        }
+        sessionHiddenModelRenderers.Clear();
+        sessionHiddenModelRendererStates.Clear();
+        SessionModelVisible = true;
+    }
+
+    static void DestroyRuntimeObject(UnityEngine.Object value)
+    {
+        if (value == null)
+            return;
+        if (Application.isPlaying)
+            Destroy(value);
+        else
+            DestroyImmediate(value);
     }
 
     void SpawnProjectile(string source, float damage, float speed, bool homing)
@@ -6141,11 +6638,18 @@ public class TestPlayController : MonoBehaviour
 
     void ResetRuntimeFlags()
     {
+        RestoreSessionModelVisibility();
         SessionDefeated = false;
         SessionReactionState = 0;
+        SessionReactionPhase = TestPlaySessionReactionPhase.None;
+        SessionAccumulatedDown = 0;
+        SessionHitEffectSpawnCount = 0;
+        SessionDefeatEffectSpawnCount = 0;
         sessionReactionActive = false;
+        sessionReactionTicks = 0;
         LastSessionImpactForce = Vector3.zero;
         LastSessionDownValue = 0;
+        LastSessionCollisionKind = TestPlayAttackCollisionKind.Unspecified;
         currentAnimation = null;
         currentScriptAnimation = null;
         currentActionSelection = new TestPlayActionSelection();
@@ -6265,6 +6769,7 @@ public class TestPlayController : MonoBehaviour
 
     void DestroyTransientObjects()
     {
+        activeSessionCombatEffects.Clear();
         activeSwordBeams.Clear();
         managedSwordBeam = null;
         activeThunderEffects.Clear();

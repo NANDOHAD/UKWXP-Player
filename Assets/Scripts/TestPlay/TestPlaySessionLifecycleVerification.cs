@@ -24,6 +24,9 @@ public static class TestPlaySessionLifecycleVerification
         public int shotActionSoundEventCount;
         public string lastSoundPlaybackKey, lastSoundPlaybackClip;
         public int missingScriptWarnings;
+        public string logScope = "RunAsync only; startup warnings are counted from Player.log separately";
+        public int peakActiveAudioSources, remainingAudioSources, voicePlaybackCount;
+        public List<string> missingAudioMappingKeys = new List<string>();
         public List<string> rounds = new List<string>();
     }
 
@@ -38,6 +41,18 @@ public static class TestPlaySessionLifecycleVerification
         };
         int roots = Count<RoboStructure>(), controllers = Count<TestPlayController>(),
             projectiles = Count<TestPlayProjectile>(), sounds = Count<AudioSource>(), particles = Count<ParticleSystem>(), canvases = Count<Canvas>();
+        int initialActiveAudio = ActiveAudioCount();
+        Application.LogCallback onLog = (message, stack, type) => {
+            if (type == LogType.Warning && message.Contains("The referenced script")) report.missingScriptWarnings++;
+        };
+        Application.logMessageReceived += onLog;
+        // Own the ground fixture: the product entry is now a selection scene without colliders.
+        // Combat's real collider-grounding path must not depend on the scene the verifier was started from.
+        int initialColliders = Count<Collider>();
+        var groundObject = new GameObject("LifecycleVerificationGround");
+        groundObject.transform.position = new Vector3(0, -0.5f, 0);
+        groundObject.AddComponent<BoxCollider>().size = new Vector3(2000, 1, 2000);
+        Physics.SyncTransforms();
         var hostObject = new GameObject("LifecycleVerificationHost");
         var host = hostObject.AddComponent<TestPlaySessionBootstrap>();
         host.enabled = false; host.gameCamera = camera; host.presentationTemplate = presentationTemplate;
@@ -106,7 +121,13 @@ public static class TestPlaySessionLifecycleVerification
                     var frame = new TestPlaySessionInput();
                     if (tick == 0) frame.pressed.lockTarget = true;
                     if (round == 1 && tick == 0) frame.pressed.shot = true;
-                    if (round == 2 && tick % 45 == 0) frame.pressed.melee = true;
+                    if (round == 2)
+                    {
+                        float separation = Vector3.Distance(a.Assets.Robo.root.transform.position,
+                            b.Assets.Robo.root.transform.position);
+                        if (separation > 3.25f) frame.held.direction = 8;
+                        else if (tick % 45 == 0) frame.pressed.melee = true;
+                    }
                     if (round == 0 || round == 3)
                     {
                         frame.held.direction = tick < 50 ? 8 : 0;
@@ -114,6 +135,8 @@ public static class TestPlaySessionLifecycleVerification
                         frame.held.rise = tick >= 100 && tick < 160;
                     }
                     host.AdvanceInput(frame, GameSession.TickSeconds);
+                    report.peakActiveAudioSources = Math.Max(report.peakActiveAudioSources,
+                        session.Mechs.Sum(m => m.Controller.presentationRuntime.ActiveAudioSourceCount));
                     report.ticks++;
                     foreach (var mech in session.Mechs)
                         foreach (var part in mech.Assets.Robo.parts)
@@ -129,9 +152,14 @@ public static class TestPlaySessionLifecycleVerification
                 if (round == 1)
                 {
                     check(hitCount == 1 && b.Controller.currentHP == b.Controller.maximumHP - 100, "real ANI shot hits once");
-                    CapturePresentationDiagnostics(host, report);
                 }
-                if (round == 2) check(defeats == 1 && host.CombatEnded && b.Controller.currentHP == 0, "real ANI melee reaches combat end");
+                if (round == 2) check(defeats == 1 && host.CombatEnded && b.Controller.currentHP == 0,
+                    "real ANI melee reaches combat end" +
+                    $" (hits={hitCount}, defeats={defeats}, hp={b.Controller.currentHP}, " +
+                    $"attackerZ={a.Assets.Robo.root.transform.position.z:F3}, " +
+                    $"defenderZ={b.Assets.Robo.root.transform.position.z:F3}, " +
+                    $"phase={b.Controller.SessionReactionPhase})");
+                CapturePresentationDiagnostics(host, report, true);
                 check(session.Mechs.All(m => m.Assets.Robo.GetComponentsInChildren<Renderer>(true)
                     .All(r => r.sharedMaterials.All(mat => mat != null && mat.shader != null && mat.shader.isSupported))), "supported mech shaders");
                 report.rounds.Add(round + ": tick=" + ticks + " hits=" + hitCount + " defeated=" + defeats);
@@ -174,13 +202,19 @@ public static class TestPlaySessionLifecycleVerification
             {
                 if (Application.isPlaying) { UnityEngine.Object.Destroy(hostObject); while (hostObject != null) await Task.Yield(); }
                 else UnityEngine.Object.DestroyImmediate(hostObject);
+                if (Application.isPlaying) { UnityEngine.Object.Destroy(groundObject); while (groundObject != null) await Task.Yield(); }
+                else UnityEngine.Object.DestroyImmediate(groundObject);
+                check(Count<Collider>() == initialColliders, "verification ground collider released");
+                report.remainingAudioSources = Math.Max(0, Count<AudioSource>() - sounds);
+                report.activeAudioSources = Math.Max(0, ActiveAudioCount() - initialActiveAudio);
+                Application.logMessageReceived -= onLog;
                 File.WriteAllText(Path.Combine(output, "lifecycle-result.json"), JsonUtility.ToJson(report, true));
             }
         }
         return report;
     }
 
-    static void CapturePresentationDiagnostics(TestPlaySessionBootstrap host, Report report)
+    static void CapturePresentationDiagnostics(TestPlaySessionBootstrap host, Report report, bool accumulate = false)
     {
         if (host == null || host.Session == null)
             return;
@@ -195,17 +229,24 @@ public static class TestPlaySessionLifecycleVerification
 
             report.mappedAudioBindings = Math.Max(report.mappedAudioBindings, presentation.MappedAudioBindingCount);
             report.mappedTextureBindings = Math.Max(report.mappedTextureBindings, presentation.MappedTextureBindingCount);
-            report.missingAudioMappings = Math.Max(report.missingAudioMappings, presentation.MissingAudioMappingCount);
+            foreach (string key in presentation.MissingAudioMappingKeys)
+                if (!report.missingAudioMappingKeys.Contains(key)) report.missingAudioMappingKeys.Add(key);
+            report.missingAudioMappings = report.missingAudioMappingKeys.Count;
             report.missingTextureMappings = Math.Max(report.missingTextureMappings, presentation.MissingTextureMappingCount);
             report.configuredAudioSources = Math.Max(report.configuredAudioSources, presentation.ConfiguredAudioSourceCount);
-            report.activeAudioSources = Math.Max(report.activeAudioSources, presentation.ActiveAudioSourceCount);
             report.audioSourcesConfigured |= presentation.AudioSourcesConfigured;
             report.propulsionClipsConfigured |= presentation.PropulsionAudioClipsConfigured;
             report.propulsionStartClipConfigured |= presentation.propulsionStartClip != null;
             report.propulsionLoopClipConfigured |= presentation.propulsionLoopClip != null;
-            report.propulsionActivationCount = Math.Max(report.propulsionActivationCount, presentation.PropulsionActivationCount);
-            report.suppressedSoundPlaybackCount = Math.Max(report.suppressedSoundPlaybackCount, presentation.SuppressedSoundPlaybackCount);
-            report.soundPlaybackCount = Math.Max(report.soundPlaybackCount, presentation.SoundPlaybackCount);
+            if (accumulate)
+            {
+                report.propulsionActivationCount += presentation.PropulsionActivationCount;
+                report.suppressedSoundPlaybackCount += presentation.SuppressedSoundPlaybackCount;
+                report.soundPlaybackCount += presentation.SoundPlaybackCount;
+                report.soundEventCount += presentation.SoundEventCount;
+                report.shotActionSoundEventCount += presentation.ShotActionSoundEventCount;
+                report.voicePlaybackCount += presentation.VoicePlaybackCount;
+            }
             if (presentation.SoundPlaybackCount > 0)
             {
                 report.lastSoundPlaybackKey = presentation.LastSoundPlaybackKey;
@@ -216,6 +257,7 @@ public static class TestPlaySessionLifecycleVerification
     }
 
     static int Count<T>() where T : UnityEngine.Object => UnityEngine.Object.FindObjectsByType<T>(FindObjectsInactive.Include, FindObjectsSortMode.None).Length;
+    static int ActiveAudioCount() => UnityEngine.Object.FindObjectsByType<AudioSource>(FindObjectsInactive.Include, FindObjectsSortMode.None).Count(s => s.isPlaying);
     static bool Rejects(Action action) { try { action(); return false; } catch (InvalidOperationException) { return true; } }
     static void Capture(Camera camera, string path)
     {

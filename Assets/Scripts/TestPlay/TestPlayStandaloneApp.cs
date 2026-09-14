@@ -1,103 +1,283 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.Localization.Settings;
 
-/// <summary>Dedicated Player entry. External game data is read only and never bundled implicitly.</summary>
+/// <summary>Game flow and read-only mech catalogue. Scene views own their Canvas elements.
+/// Scene/loading presentation is a Unity alternative; the existing 60 Hz session owns combat.</summary>
 public sealed class TestPlayStandaloneApp : MonoBehaviour
 {
+    public const string SelectionScene = "Assets/Scenes/MechSelection.unity";
+    public const string BattleScene = "Assets/Scenes/StandaloneTestPlay.unity";
     const string DefaultRelativeMechsRoot = "Windom_Data\\Robo";
-
-    [Tooltip("プレイヤー機体用。シーン配置の TestPlayHUDCanvas。未設定時は実行時生成。")]
+    // Retained public facade for existing Inspector/automation callers. Rebound on scene entry.
     public GameObject hudCanvas;
-    [Tooltip("シーン配置のセッションhost。未設定時は実行時に生成する。")]
     public TestPlaySessionBootstrap sessionHost;
-    [Tooltip("自機スロット。sessionHost未設定時のフォールバック用。")]
     public TestPlayMechSlot playerSlot;
-    [Tooltip("相手機スロット。sessionHost未設定時のフォールバック用。")]
     public TestPlayMechSlot opponentSlot;
-
+    public TestPlayLoadingView loadingView;
+    public static TestPlayStandaloneApp Instance { get; private set; }
+    public bool IsBusy { get; private set; }
+    public bool IsReady { get; private set; }
+    public bool LastOperationSucceeded { get; private set; }
+    public string Message => message;
+    public string MechsRoot => mechsRoot;
+    public IReadOnlyList<string> MechNames => mechNames;
+    public int FirstIndex => firstIndex;
+    public int SecondIndex => secondIndex;
+    public TestPlaySessionBootstrap Host => host;
+    public string Phase { get; private set; } = "初期化中";
+    public bool CanCancel => IsBusy && cancellation != null && !cancellation.IsCancellationRequested && !quitting;
     string mechsRoot = "";
     readonly List<string> mechNames = new List<string>();
-    // フォルダ名 → charaselect.sdt 1行目の表示名（なければフォルダ名をフォールバック）
     readonly Dictionary<string, string> mechDisplayNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, Texture2D> selectionImages = new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
     int firstIndex, secondIndex;
-    bool sameOpponent = true;
-    // ドロップダウンの開閉状態
-    bool firstDropdownOpen, secondDropdownOpen;
-    Vector2 firstDropdownScroll, secondDropdownScroll;
-    // フォルダパス欄の折りたたみ状態
-    bool folderFoldout = false;
     string message = "機体フォルダから自機と相手機を選んでください。";
-    string cliFirst = "", cliSecond = "";
     TestPlaySessionBootstrap host;
+    TestPlaySelectionView selectionView;
     Camera gameCamera;
-    bool busy, verifying, quitting;
-    Font font;
+    bool quitting;
+    CancellationTokenSource cancellation;
+    Task operation;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    static void ResetInstance() { Instance = null; }
+
+    void Awake()
+    {
+        if (!Application.isPlaying) return;
+        if (Instance != null && Instance != this) { gameObject.SetActive(false); Destroy(gameObject); return; }
+        Instance = this;
+        DontDestroyOnLoad(gameObject);
+    }
 
     async void Start()
     {
+        if (Instance != this) return;
         Application.runInBackground = true;
-        var cam = new GameObject("StandaloneCamera", typeof(Camera), typeof(AudioListener));
-        gameCamera = cam.GetComponent<Camera>();
-        cam.transform.position = new Vector3(0, 3, -8);
-        var light = new GameObject("StandaloneLight", typeof(Light)).GetComponent<Light>();
-        light.type = LightType.Directional; light.intensity = 1.3f;
-        light.transform.rotation = Quaternion.Euler(45, -30, 0);
-        var floor = GameObject.CreatePrimitive(PrimitiveType.Plane);
-        floor.name = "StandaloneGround"; floor.transform.localScale = Vector3.one * 100;
-        host = ResolveSessionHost();
-        host.gameCamera = gameCamera;
-        if (hudCanvas != null) host.hudCanvas = hudCanvas;
-        if (playerSlot != null && host.playerSlot == null) host.playerSlot = playerSlot;
-        if (opponentSlot != null && host.opponentSlot == null) host.opponentSlot = opponentSlot;
-        if (host.presentationTemplate == null)
-        {
-            TestPlayMechSlot mappingSlot = playerSlot != null ? playerSlot : host.playerSlot;
-            if (mappingSlot != null)
-                host.presentationTemplate = mappingSlot.GetComponent<TestPlayPresentationRuntime>();
-        }
-        if (host.presentationTemplate == null)
-        {
-            GameObject canvas = hudCanvas != null ? hudCanvas : host.hudCanvas;
-            if (canvas != null)
-                host.presentationTemplate = canvas.GetComponentInChildren<TestPlayPresentationRuntime>(true);
-        }
-        font = Font.CreateDynamicFontFromOSFont(new[] { "Meiryo", "Yu Gothic", "Arial" }, 16);
         mechsRoot = Argument("--mechs-folder") ?? DefaultMechsRoot();
-        cliFirst = Argument("--mech") ?? "";
-        cliSecond = Argument("--opponent") ?? cliFirst;
-        string output = Argument("--verify-output");
-        verifying = !string.IsNullOrEmpty(output);
-        try
-        {
-            // The legacy Assimp wrapper defaults to the process working directory.
-            // A standalone launch must resolve the packaged native DLL explicitly.
+        await ExecuteAsync(async token => {
+            SetPhase("初期化中", false);
             if (!Application.isEditor && Application.platform == RuntimePlatform.WindowsPlayer &&
                 !Assimp.Unmanaged.AssimpLibrary.Instance.LibraryLoaded)
                 Assimp.Unmanaged.AssimpLibrary.Instance.LoadLibrary(
                     Path.Combine(Application.dataPath, "Plugins", "x86_64", "assimp64.dll"));
             await LocalizationSettings.InitializationOperation.Task;
+            token.ThrowIfCancellationRequested();
             RefreshMechList();
-            if (verifying)
+            string first = Argument("--mech");
+            string output = Argument("--verify-output");
+            string presentation = Argument("--verify-presentation-output");
+            if (!string.IsNullOrEmpty(output) || !string.IsNullOrEmpty(presentation))
             {
-                Debug.Log("[Standalone Player] Lifecycle verification started");
-                var report = await TestPlaySessionLifecycleVerification.RunAsync(
-                    cliFirst, output, gameCamera, default, host.presentationTemplate);
-                Debug.Log("[Standalone Player] " + JsonUtility.ToJson(report));
+                await LoadSceneAsync(BattleScene);
+                BindBattle();
+                SetPhase("検証中", false);
+                if (!string.IsNullOrEmpty(presentation))
+                {
+                    var report = await TestPlayPresentationVerification.RunAsync(first, presentation, gameCamera, token, host.presentationTemplate);
+                    Debug.Log("[Standalone Player] Presentation " + JsonUtility.ToJson(report));
+                    await LoadSceneAsync(SelectionScene); BindSelection();
+                    loadingView.Show(false);
+                    await CaptureSelectionVerification(presentation, "selection-ui.png");
+                    ReleaseImages();
+                    selectionImages[SelectedName(firstIndex)] = null;
+                    selectionImages[SelectedName(secondIndex)] = null;
+                    selectionView.RefreshSelection();
+                    await CaptureSelectionVerification(presentation, "selection-missing-ui.png");
+                }
+                else
+                {
+                    var report = await TestPlaySessionLifecycleVerification.RunAsync(first, output, gameCamera, token, host.presentationTemplate);
+                    Debug.Log("[Standalone Player] " + JsonUtility.ToJson(report));
+                }
                 if (!Application.isEditor) Application.Quit(0);
             }
-            else if (!string.IsNullOrEmpty(cliFirst))
-                await Run(() => host.StartAsync(cliFirst, string.IsNullOrWhiteSpace(cliSecond) ? cliFirst : cliSecond));
+            else if (!string.IsNullOrEmpty(first))
+                await EnterBattleAsync(first, Argument("--opponent") ?? first, token);
+            else
+            {
+                await LoadSceneAsync(SelectionScene);
+                BindSelection();
+            }
+            IsReady = true;
+        });
+        if (!LastOperationSucceeded && (!string.IsNullOrEmpty(Argument("--verify-output")) || !string.IsNullOrEmpty(Argument("--verify-presentation-output"))) && !Application.isEditor)
+            Application.Quit(1);
+        string uiOutput = Argument("--verify-ui-output");
+        if (!string.IsNullOrEmpty(uiOutput) && IsReady && !IsBusy)
+        {
+            await TestPlayUiFlowVerification.StartVerification(uiOutput);
+            if (!Application.isEditor) Application.Quit(TestPlayUiFlowVerification.Current.state == "Succeeded" ? 0 : 1);
         }
+    }
+
+    public void SelectMech(bool opponent, int index)
+    {
+        if (IsBusy || index < 0 || index >= mechNames.Count) return;
+        if (opponent) secondIndex = index; else firstIndex = index;
+        selectionView?.RefreshSelection();
+    }
+
+    public void RefreshCatalogue(string root)
+    {
+        if (IsBusy) return;
+        mechsRoot = root;
+        try { RefreshMechList(); }
+        catch (Exception e) { message = "機体一覧を読み込めません: " + e.Message; }
+        selectionView?.Bind(this);
+    }
+
+    public string DisplayNameAt(int index) => GetDisplayName(SelectedName(index));
+    public Texture2D PreviewAt(int index) => GetSelectionImage(SelectedName(index));
+
+    public Task StartBattleAsync()
+    {
+        if (IsBusy || quitting) return Task.CompletedTask;
+        return ExecuteAsync(async token => {
+            // Validate both independent selections before leaving the selection scene.
+            string first = ResolveSelectedPath(firstIndex);
+            string second = ResolveSelectedPath(secondIndex);
+            await EnterBattleAsync(first, second, token);
+        });
+    }
+
+    async Task EnterBattleAsync(string first, string second, CancellationToken token)
+    {
+        await LoadSceneAsync(BattleScene);
+        token.ThrowIfCancellationRequested();
+        BindBattle();
+        ReleaseImages();
+        SetPhase("機体データを読み込み中", false);
+        await host.StartAsync(first, second, token);
+        token.ThrowIfCancellationRequested();
+        UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null);
+    }
+
+    public Task RestartBattleAsync()
+    {
+        if (IsBusy || quitting || host == null || host.Status != "Running") return Task.CompletedTask;
+        return ExecuteAsync(async token => {
+            SetPhase("再戦の準備中", false);
+            await host.RestartAsync(token);
+            UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null);
+        });
+    }
+
+    public Task ReturnToSelectionAsync()
+    {
+        if (IsBusy || quitting) return Task.CompletedTask;
+        return ExecuteAsync(async token => { await StopBattleAsync(); await LoadSceneAsync(SelectionScene); BindSelection(); });
+    }
+
+    public void CancelLoading()
+    {
+        if (!CanCancel) return;
+        cancellation.Cancel();
+        SetPhase("読込を中止しています", false);
+    }
+
+    public async Task QuitAsync()
+    {
+        if (quitting) return;
+        quitting = true;
+        cancellation?.Cancel();
+        if (operation != null) await operation;
+        await StopBattleAsync();
+        Application.Quit();
+#if UNITY_EDITOR
+        UnityEditor.EditorApplication.isPlaying = false;
+#endif
+    }
+
+    Task ExecuteAsync(Func<CancellationToken, Task> action)
+    {
+        if (IsBusy) return Task.CompletedTask;
+        IsBusy = true; LastOperationSucceeded = false;
+        cancellation = new CancellationTokenSource();
+        loadingView?.Show(true);
+        return operation = ExecuteCoreAsync(action, cancellation.Token);
+    }
+
+    async Task ExecuteCoreAsync(Func<CancellationToken, Task> action, CancellationToken token)
+    {
+        try { await action(token); message = ""; LastOperationSucceeded = true; }
         catch (Exception e)
         {
-            message = e.Message; Debug.LogException(e);
-            if (verifying && !Application.isEditor) Application.Quit(1);
+            message = e is OperationCanceledException ? "読込を中止しました。" : "読み込みに失敗しました: " + e.Message;
+            try
+            {
+                await StopBattleAsync();
+                if (!quitting) { await LoadSceneAsync(SelectionScene); BindSelection(); IsReady = true; }
+            }
+            catch (Exception recovery) { message += "\n選択画面への復帰に失敗しました: " + recovery.Message; Debug.LogException(recovery); }
         }
+        finally
+        {
+            cancellation.Dispose(); cancellation = null; IsBusy = false;
+            loadingView?.Show(false);
+            selectionView?.RefreshSelection();
+        }
+    }
+
+    async Task StopBattleAsync()
+    {
+        SetPhase("戦闘を終了しています", false);
+        if (host == null) host = FindFirstObjectByType<TestPlayBattleView>()?.sessionHost;
+        if (host != null) await host.StopAsync();
+        host = null; sessionHost = null; hudCanvas = null; playerSlot = null; opponentSlot = null; gameCamera = null;
+    }
+
+    async Task LoadSceneAsync(string path)
+    {
+        if (SceneManager.GetActiveScene().path == path) return;
+        SetPhase(path == SelectionScene ? "機体選択画面を読み込み中" : "戦闘シーンを読み込み中", true);
+        // Unity scene loads cannot be cancelled midway. Finish activation, then honour cancellation
+        // before loading mechs; cleanup and return to selection use the same serialized flow.
+        var load = SceneManager.LoadSceneAsync(path, LoadSceneMode.Single);
+        if (load == null) throw new IOException("シーンを読み込めません: " + path);
+        while (!load.isDone) { loadingView?.SetProgress(load.progress / 0.9f); await Task.Yield(); }
+    }
+
+    void BindSelection()
+    {
+        selectionView = FindFirstObjectByType<TestPlaySelectionView>();
+        if (selectionView == null) throw new InvalidOperationException("機体選択Canvasがありません。");
+        selectionView.Bind(this);
+    }
+
+    void BindBattle()
+    {
+        selectionView = null;
+        var view = FindFirstObjectByType<TestPlayBattleView>();
+        if (view == null || view.sessionHost == null || view.gameCamera == null)
+            throw new InvalidOperationException("戦闘シーンの参照が未設定です。");
+        host = sessionHost = view.sessionHost;
+        gameCamera = view.gameCamera; host.gameCamera = gameCamera;
+        hudCanvas = host.hudCanvas; playerSlot = host.playerSlot; opponentSlot = host.opponentSlot;
+        view.Bind(this);
+    }
+
+    void SetPhase(string value, bool progress)
+    {
+        Phase = value;
+        loadingView?.SetPhase(value, progress);
+    }
+
+    async Task CaptureSelectionVerification(string directory, string filename)
+    {
+        float ready = Time.realtimeSinceStartup + 0.2f;
+        while (Time.realtimeSinceStartup < ready) await Task.Yield();
+        string path = Path.Combine(directory, filename);
+        ScreenCapture.CaptureScreenshot(path);
+        float deadline = Time.realtimeSinceStartup + 10f;
+        while (!File.Exists(path) && Time.realtimeSinceStartup < deadline) await Task.Yield();
+        if (!File.Exists(path)) throw new IOException("機体選択画面の保存がタイムアウトしました。");
     }
 
     public static string Argument(string name)
@@ -106,166 +286,12 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         for (int i = 0; i + 1 < args.Length; i++) if (args[i] == name) return args[i + 1];
         return null;
     }
-
-    async Task Run(Func<Task> operation)
-    {
-        busy = true;
-        try { await operation(); message = ""; }
-        catch (OperationCanceledException) { message = "読込を中止しました。"; }
-        catch (Exception e) { message = e.Message; }
-        finally { busy = false; }
-    }
-
-    async void OnGUI()
-    {
-        if (host == null || verifying) return;
-        if (font != null) GUI.skin.font = font;
-
-        // Finish GUI layout before awaiting; resumed continuations must not invoke GUILayout.
-        if (IsBattleUiActive())
-            await DrawBattleUi();
-        else
-            await DrawMainUi();
-    }
-
-    /// <summary>開始後（読込・実行・終了処理中）は機体選択を隠し、操作最小の小窓だけを出す。</summary>
-    bool IsBattleUiActive()
-    {
-        string status = host.Status;
-        return status == "Loading" || status == "Running" || status == "Stopping" || busy;
-    }
-
-    async Task DrawMainUi()
-    {
-        GUILayout.BeginArea(new Rect(15, 15, 720, 560), GUI.skin.box);
-
-        // ── タイトルと状態 ──────────────────────────────────
-        GUILayout.Label("Ultimate Knight ウィンダムXP MODプレイヤー");
-        GUILayout.Label("状態: " + DisplayStatus(host.Status));
-        GUILayout.Space(4);
-
-        // ── フォルダパス（折りたたみ） ────────────────────────
-        bool editable = !busy;
-        GUI.enabled = editable;
-        folderFoldout = GUILayout.Toggle(folderFoldout, "▶ Roboフォルダパス", GUI.skin.button);
-        if (folderFoldout)
-        {
-            GUILayout.BeginHorizontal();
-            mechsRoot = GUILayout.TextField(mechsRoot);
-            GUILayout.EndHorizontal();
-        }
-        bool refresh = GUILayout.Button("フォルダ内の機体を再読込み");
-        GUILayout.Space(4);
-
-        // ── 機体選択（2カラム） ────────────────────────────────
-        if (mechNames.Count == 0)
-        {
-            GUILayout.Label("機体フォルダが見つかりません。ルートを確認して再読込してください。");
-        }
-        else
-        {
-            GUILayout.BeginHorizontal();
-
-            // 自機カラム
-            GUILayout.BeginVertical(GUI.skin.box, GUILayout.Width(330));
-            GUILayout.Label("【 自機 】");
-            bool firstChanged;
-            firstIndex = DrawMechDropdown(firstIndex, ref firstDropdownOpen, ref firstDropdownScroll,
-                "firstDropdown", out firstChanged);
-            if (firstChanged && firstDropdownOpen) secondDropdownOpen = false;
-            // ドロップダウン展開中はプレビューを隠す（リストの下にselect.pngが埋もれないよう）
-            if (!firstDropdownOpen) DrawMechPreview(SelectedName(firstIndex), 310, 160);
-            GUILayout.EndVertical();
-
-            GUILayout.Space(8);
-
-            // 相手機カラム
-            GUILayout.BeginVertical(GUI.skin.box, GUILayout.Width(330));
-            GUILayout.Label("【 相手機 】");
-
-            bool secondChanged;
-            secondIndex = DrawMechDropdown(secondIndex, ref secondDropdownOpen, ref secondDropdownScroll,
-                "secondDropdown", out secondChanged);
-            if (secondChanged && secondDropdownOpen) firstDropdownOpen = false;
-            // ドロップダウン展開中はプレビューを隠す（リストの下にselect.pngが埋もれないよう）
-            if (!secondDropdownOpen) DrawMechPreview(SelectedName(secondIndex), 310, 160);
-
-            GUILayout.EndVertical();
-
-            GUILayout.EndHorizontal();
-        }
-
-        GUILayout.Space(4);
-
-        // ── 操作ボタン行 ──────────────────────────────────────
-        GUILayout.BeginHorizontal();
-        bool start = GUILayout.Button("▶ 開始", GUILayout.Height(30));
-        GUI.enabled = !quitting;
-        bool quit = GUILayout.Button("✕ アプリを終了", GUILayout.Height(30));
-        GUI.enabled = true;
-        GUILayout.EndHorizontal();
-
-        GUILayout.Label("操作: 矢印=移動  Z=上昇/ブースト  X=射撃  C=格闘  V=ガード  S=ロック  A/D/F=必殺技");
-        if (!string.IsNullOrEmpty(message)) GUILayout.Label(message);
-        GUILayout.EndArea();
-
-        if (refresh)
-        {
-            RefreshMechList();
-            return;
-        }
-        if (start)
-        {
-            firstDropdownOpen = false;
-            secondDropdownOpen = false;
-            try
-            {
-                string firstPath = ResolveSelectedPath(firstIndex);
-                string secondPath = sameOpponent ? firstPath : ResolveSelectedPath(secondIndex);
-                await Run(() => host.StartAsync(firstPath, secondPath));
-            }
-            catch (Exception e) { message = e.Message; }
-        }
-        else if (quit) await QuitApp();
-    }
-
-    async Task DrawBattleUi()
-    {
-        GUILayout.BeginArea(new Rect(15, 15, 360, 160), GUI.skin.box);
-        GUILayout.Label(DisplayStatus(host.Status));
-        if (host.CombatEnded) GUILayout.Label("戦闘終了 — 再戦できます。");
-
-        GUILayout.BeginHorizontal();
-        GUI.enabled = host.Status == "Loading" || (!busy && host.Status == "Running");
-        bool stop = GUILayout.Button(host.Status == "Loading" ? "読込中止" : "戦闘終了");
-        GUI.enabled = !busy && host.Status == "Running";
-        bool restart = GUILayout.Button("再戦");
-        GUI.enabled = !quitting;
-        bool quit = GUILayout.Button("アプリを終了");
-        GUI.enabled = true;
-        GUILayout.EndHorizontal();
-
-        if (!string.IsNullOrEmpty(message)) GUILayout.Label(message);
-        GUILayout.EndArea();
-
-        if (restart) await Run(() => host.RestartAsync());
-        else if (stop) await Run(() => host.StopAsync());
-        else if (quit) await QuitApp();
-    }
-
-    async Task QuitApp()
-    {
-        quitting = true;
-        await Run(() => host.StopAsync());
-        Application.Quit();
-    }
-
     void RefreshMechList()
     {
         string previousFirst = SelectedName(firstIndex);
         string previousSecond = SelectedName(secondIndex);
         foreach (Texture2D image in selectionImages.Values)
-            if (image != null) Destroy(image);
+            ReleaseSelectionImage(image);
         selectionImages.Clear();
         mechNames.Clear();
         mechDisplayNames.Clear();
@@ -316,60 +342,16 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         if (sdtPath == null) return folderName;
         try
         {
-            // Shift-JIS（CP932）で読む
-            var encoding = System.Text.Encoding.GetEncoding(932);
-            using (var reader = new StreamReader(sdtPath, encoding))
-            {
-                string line = reader.ReadLine();
-                if (!string.IsNullOrWhiteSpace(line))
-                    return line.Trim();
-            }
+            // Use the shared decoder, including in a standalone Player without CP932 providers.
+            string text = USEncoder.ToEncoding.ToUnicode(File.ReadAllBytes(sdtPath));
+            string line = text.Split(new[] { '\r', '\n' }, 2)[0];
+            if (!string.IsNullOrWhiteSpace(line)) return line.Trim();
         }
         catch (Exception e)
         {
             Debug.LogWarning("[Standalone Player] charaselect.sdtの読込に失敗しました: " + sdtPath + " / " + e.Message);
         }
         return folderName;
-    }
-
-    /// <summary>ドロップダウン形式の機体選択。展開/折りたたみと選択を管理する。</summary>
-    /// <param name="changed">このフレームにドロップダウン展開状態が変わったか</param>
-    int DrawMechDropdown(int index, ref bool open, ref Vector2 scroll, string controlName, out bool changed)
-    {
-        changed = false;
-        if (mechNames.Count == 0)
-            return 0;
-
-        // ドロップダウンボタン: charaselect.sdt由来の表示名を表示
-        string displayName = SelectedDisplayName(index);
-        if (GUILayout.Button(string.IsNullOrEmpty(displayName) ? "-- 選択してください --" : displayName))
-        {
-            open = !open;
-            changed = true;
-        }
-
-        if (!open)
-            return index;
-
-        // 展開時: スクロール付きリスト表示（表示名を使用）
-        scroll = GUILayout.BeginScrollView(scroll, GUILayout.Height(140));
-        for (int i = 0; i < mechNames.Count; i++)
-        {
-            bool isSelected = (i == index);
-            // 選択中は強調
-            var origColor = GUI.backgroundColor;
-            if (isSelected) GUI.backgroundColor = new Color(0.4f, 0.8f, 1f, 1f);
-            string label = GetDisplayName(mechNames[i]);
-            if (GUILayout.Button(label))
-            {
-                index = i;
-                open = false;
-                changed = true;
-            }
-            GUI.backgroundColor = origColor;
-        }
-        GUILayout.EndScrollView();
-        return index;
     }
 
     /// <summary>インデックスから表示名（charaselect.sdt 1行目 or フォルダ名）を返す。</summary>
@@ -387,19 +369,6 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         return mechDisplayNames.TryGetValue(folderName, out display) ? display : folderName;
     }
 
-    /// <summary>select.pngのプレビュー画像を指定サイズの枠内に描画する。</summary>
-    void DrawMechPreview(string mechName, float maxWidth, float maxHeight)
-    {
-        Texture2D preview = GetSelectionImage(mechName);
-        if (preview == null) return;
-        float aspect = (float)preview.width / Mathf.Max(1f, preview.height);
-        float w = Mathf.Min(maxWidth, maxHeight * aspect);
-        float h = w / aspect;
-        Rect rect = GUILayoutUtility.GetRect(w, h, GUILayout.ExpandWidth(false));
-        GUI.DrawTexture(rect, preview, ScaleMode.ScaleToFit, true);
-    }
-    
-
     Texture2D GetSelectionImage(string mechName)
     {
         if (string.IsNullOrEmpty(mechName) || string.IsNullOrEmpty(mechsRoot))
@@ -408,29 +377,22 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
             return cached;
 
         string directory = Path.Combine(mechsRoot, mechName);
-        string selectPath = FindFileIgnoreCase(directory, "select.png");
-        if (selectPath == null)
-        {
-            selectionImages[mechName] = null;
-            return null;
-        }
-
+        string selectPath = null;
+        Texture2D texture = null;
         try
         {
+            selectPath = Directory.Exists(directory) ? FindFileIgnoreCase(directory, "select.png") : null;
+            if (selectPath == null) return null;
             CypherTranscoder transcoder = new CypherTranscoder();
-            if (!transcoder.findCypher(selectPath))
-            {
-                selectionImages[mechName] = null;
-                return null;
-            }
+            // Local extension registration preserves the shared decoder and its scan rules.
+            transcoder.registerFileType(Path.GetExtension(selectPath), 0x474e5089);
+            if (!transcoder.findCypher(selectPath)) return null;
             byte[] imageBytes = transcoder.Transcode(selectPath);
-            Texture2D texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-            if (!texture.LoadImage(imageBytes, false))
-            {
-                Destroy(texture);
-                selectionImages[mechName] = null;
-                return null;
-            }
+            // Avoid passing an absent/truncated signature to the native image decoder.
+            if (imageBytes.Length < 8 || imageBytes[4] != 13 || imageBytes[5] != 10
+                || imageBytes[6] != 26 || imageBytes[7] != 10) return null;
+            texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            if (!texture.LoadImage(imageBytes, false)) return null;
             texture.name = mechName + "_select";
             selectionImages[mechName] = texture;
             return texture;
@@ -441,6 +403,18 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
             selectionImages[mechName] = null;
             return null;
         }
+        finally
+        {
+            if (!selectionImages.ContainsKey(mechName)) selectionImages[mechName] = null;
+            if (selectionImages[mechName] != texture) ReleaseSelectionImage(texture);
+        }
+    }
+
+    static void ReleaseSelectionImage(Texture2D texture)
+    {
+        if (texture == null) return;
+        if (Application.isPlaying) Destroy(texture);
+        else DestroyImmediate(texture);
     }
 
     string SelectedName(int index)
@@ -505,37 +479,16 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         return Path.GetFullPath(DefaultRelativeMechsRoot);
     }
 
-    static string DisplayStatus(string status)
-    {
-        switch (status)
-        {
-            case "Loading": return "読込中";
-            case "Running": return "実行中";
-            case "Stopping": return "終了処理中";
-            case "Stopped": return "終了";
-            case "Cancelled": return "読込中止";
-            case "Faulted": return "起動・実行失敗";
-            default: return "開始待ち";
-        }
-    }
 
-    TestPlaySessionBootstrap ResolveSessionHost()
+    void ReleaseImages()
     {
-        if (sessionHost != null) return sessionHost;
-        sessionHost = GetComponent<TestPlaySessionBootstrap>();
-        if (sessionHost != null) return sessionHost;
-        sessionHost = FindFirstObjectByType<TestPlaySessionBootstrap>();
-        if (sessionHost != null) return sessionHost;
-        var created = new GameObject("TwoMechSessionHost");
-        sessionHost = created.AddComponent<TestPlaySessionBootstrap>();
-        return sessionHost;
+        foreach (Texture2D image in selectionImages.Values) ReleaseSelectionImage(image);
+        selectionImages.Clear();
     }
 
     void OnDestroy()
     {
-        if (font != null) Destroy(font);
-        foreach (Texture2D image in selectionImages.Values)
-            if (image != null) Destroy(image);
-        selectionImages.Clear();
+        if (Instance == this) { Instance = null; cancellation?.Cancel(); }
+        ReleaseImages();
     }
 }

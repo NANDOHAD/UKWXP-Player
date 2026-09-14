@@ -36,6 +36,35 @@ public enum TestPlayCombatHitDecision
     Invulnerable
 }
 
+public enum TestPlaySessionReactionPhase
+{
+    None,
+    Hit,
+    Knockback,
+    Downed,
+    Recovering,
+    Defeated
+}
+
+public struct TestPlaySessionReactionInput
+{
+    public int accumulatedDown;
+    public int incomingDown;
+    public int reactionState;
+    public float hpAfter;
+    public bool airborne;
+}
+
+public struct TestPlaySessionReactionDecision
+{
+    public int accumulatedDown;
+    public bool startsReaction;
+    public bool knockdown;
+    public bool defeated;
+    public int actionId;
+    public TestPlaySessionReactionPhase phase;
+}
+
 public struct TestPlayDefenseHitInput
 {
     public TestPlayAttackCollisionKind collisionKind;
@@ -309,6 +338,15 @@ public static class TestPlayCombatCore
     public const float OriginalType11GuardDotThreshold = 0.766f;
     public const float OriginalType57GuardDotThreshold = 0.5f;
     public const int OriginalGuardHitTimerTicks = 20;
+    public const int OriginalHitReactionDownThreshold = 200;
+    public const int OriginalKnockdownThreshold = 401;
+    public const int OriginalHitReactionTicks = 40;
+    public const int OriginalKnockbackMinimumTicks = 11;
+    public const int OriginalDownedTicks = 60;
+    public const int OriginalGetUpTicks = 35;
+    // Original action 16 (FUN_004e3420) emits its destruction smoke on c38 == 0,
+    // then switches to the post-destruction action after c38 > 59.
+    public const int OriginalDefeatPresentationTicks = 60;
 
     /// <summary>
     /// FUN_004b27a0のAttackFlag・ShildGuard・c40/c44/c50分岐をScene非依存で評価する。
@@ -392,6 +430,45 @@ public static class TestPlayCombatCore
         if ((attackFlag & 0x01) != 0)
             return 2;
         return (attackFlag & 0x40) == 0 ? 1 : 0;
+    }
+
+    /// <summary>
+    /// FUN_004ba1c0のpending reaction、蓄積down、HP、空中分岐をScene非依存で評価する。
+    /// action 13/14/15の後段16/17と接触移動はUnity Adapterが担当する。
+    /// </summary>
+    public static TestPlaySessionReactionDecision ResolveSessionReaction(
+        TestPlaySessionReactionInput input)
+    {
+        int accumulatedDown = Mathf.Max(0, input.accumulatedDown) +
+                              Mathf.Max(0, input.incomingDown);
+        bool defeated = input.hpAfter <= 0f;
+        bool hasReaction = input.reactionState != 0;
+        bool startsReaction = defeated ||
+            (hasReaction && (accumulatedDown >= OriginalHitReactionDownThreshold ||
+                             input.reactionState == 2 || input.reactionState == 3));
+        bool knockdown = startsReaction &&
+            (defeated || accumulatedDown >= OriginalKnockdownThreshold || input.reactionState == 3);
+
+        return new TestPlaySessionReactionDecision
+        {
+            accumulatedDown = accumulatedDown,
+            startsReaction = startsReaction,
+            knockdown = knockdown,
+            defeated = defeated,
+            actionId = startsReaction ? (knockdown ? 15 : input.airborne ? 14 : 13) : -1,
+            phase = defeated
+                ? TestPlaySessionReactionPhase.Defeated
+                : knockdown
+                    ? TestPlaySessionReactionPhase.Knockback
+                    : startsReaction
+                        ? TestPlaySessionReactionPhase.Hit
+                        : TestPlaySessionReactionPhase.None
+        };
+    }
+
+    public static int TickAccumulatedDown(int value)
+    {
+        return Mathf.Max(0, value - 1);
     }
 
     public static int TickPositiveTimer(int value)

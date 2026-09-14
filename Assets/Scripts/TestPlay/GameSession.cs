@@ -315,7 +315,10 @@ public sealed class GameSession : ITestPlayTargetProvider
         HitResolved?.Invoke(new TestPlaySessionHit { sessionId = SessionId.ToString(), tick = Tick,
             attackId = attackId, ownerId = owner.MechId, targetId = target.MechId,
             decision = resolved.decision, requestedDamage = hit.damage, damage = before - defender.currentHP,
-            hpBefore = before, hpAfter = defender.currentHP, reaction = resolved.reactionState });
+            hpBefore = before, hpAfter = defender.currentHP, reaction = resolved.reactionState,
+            collisionKind = resolved.collisionKind, down = resolved.down,
+            accumulatedDown = defender.SessionAccumulatedDown,
+            reactionPhase = defender.SessionReactionPhase });
         if (before > 0 && defender.currentHP <= 0) MechDefeated?.Invoke(target);
         return true;
     }
@@ -380,6 +383,9 @@ public struct TestPlaySessionHit
 {
     public string sessionId;
     public int tick, attackId, ownerId, targetId, reaction;
+    public int down, accumulatedDown;
     public TestPlayCombatHitDecision decision;
+    public TestPlayAttackCollisionKind collisionKind;
+    public TestPlaySessionReactionPhase reactionPhase;
     public float requestedDamage, damage, hpBefore, hpAfter;
 }

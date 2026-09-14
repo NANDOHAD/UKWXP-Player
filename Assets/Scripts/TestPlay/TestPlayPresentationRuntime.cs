@@ -87,6 +87,11 @@ public class TestPlayPresentationRuntime : MonoBehaviour
     public int SuppressedSoundPlaybackCount { get; private set; }
     /// <summary>Diagnostic count of successfully resolved one-shot sound bindings.</summary>
     public int SoundPlaybackCount { get; private set; }
+    public int SoundEventCount { get; private set; }
+    public int ShotActionSoundEventCount { get; private set; }
+    public int VoicePlaybackCount { get; private set; }
+    public int Type1ShotPlaybackCount { get; private set; }
+    public string[] MissingAudioMappingKeys => new List<string>(missingAudioKeys).ToArray();
     /// <summary>Last resolved sound key and clip, for Player-only audio troubleshooting.</summary>
     public string LastSoundPlaybackKey { get; private set; } = "";
     public string LastSoundPlaybackClip { get; private set; } = "";
@@ -514,12 +519,16 @@ public class TestPlayPresentationRuntime : MonoBehaviour
         switch (presentationEvent.type)
         {
             case TestPlayPresentationEventType.Sound:
+                SoundEventCount++;
+                if (presentationEvent.actionIndex >= 100 && presentationEvent.actionIndex < 110)
+                    ShotActionSoundEventCount++;
                 if (controller != null && controller.ShouldSuppressPresentationSound(presentationEvent))
                 {
                     SuppressedSoundPlaybackCount++;
                     break;
                 }
-                PlayBinding(sounds, presentationEvent.symbol, soundSource, "Snd");
+                if (PlayBinding(sounds, presentationEvent.symbol, soundSource, "Snd") &&
+                    presentationEvent.source == "Type1Projectile") Type1ShotPlaybackCount++;
                 break;
             case TestPlayPresentationEventType.Voice:
                 PlayBinding(voices, presentationEvent.symbol, voiceSource, "Voice");
@@ -527,25 +536,30 @@ public class TestPlayPresentationRuntime : MonoBehaviour
         }
     }
 
-    void PlayBinding(List<TestPlayAudioBinding> bindings, string key, AudioSource source, string command)
+    bool PlayBinding(List<TestPlayAudioBinding> bindings, string key, AudioSource source, string command)
     {
         if (source == null)
-            return;
+            return false;
 
         TestPlayAudioBinding binding = FindBinding(bindings, key);
         if (binding == null || binding.clip == null)
         {
             string missingKey = command + ":" + (key ?? "");
-            if (logMissingAudio && missingAudioKeys.Add(missingKey))
+            bool firstOccurrence = missingAudioKeys.Add(missingKey);
+            if (logMissingAudio && firstOccurrence)
                 Debug.LogWarning("[TestPlay][Audio] Missing original resource mapping: " + missingKey);
-            return;
+            return false;
         }
 
         source.PlayOneShot(binding.clip, Mathf.Clamp01(binding.volume));
-        SoundPlaybackCount++;
-        LastSoundPlaybackKey = key ?? "";
-        LastSoundPlaybackClip = binding.clip != null ? binding.clip.name : "";
-        Debug.Log("[TestPlay][Audio] Played " + command + ":" + LastSoundPlaybackKey + " clip=" + LastSoundPlaybackClip);
+        if (command == "Snd")
+        {
+            SoundPlaybackCount++;
+            LastSoundPlaybackKey = key ?? "";
+            LastSoundPlaybackClip = binding.clip.name;
+        }
+        else VoicePlaybackCount++;
+        return true;
     }
 
     public static TestPlayAudioBinding FindBinding(List<TestPlayAudioBinding> bindings, string key)
