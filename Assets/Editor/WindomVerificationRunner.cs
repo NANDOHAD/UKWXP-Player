@@ -13,7 +13,8 @@ using UnityEngine.Localization.Settings;
 public enum WindomVerificationSelection
 {
     Runtime = 1, Hod = 2, Golden = 4, SelectedGolden = 8, All = 7,
-    BaselineComparison = 16, AniInventory = 32, Standalone = 64, Session = 128, Lifecycle = 256, Regression = All | BaselineComparison
+    BaselineComparison = 16, AniInventory = 32, Standalone = 64, Session = 128, Lifecycle = 256,
+    Presentation = 512, Regression = All | BaselineComparison
 }
 
 [Serializable]
@@ -65,7 +66,7 @@ public static class WindomVerificationRunner
     public static string StartVerification(WindomVerificationSelection selection, string mechFolder = null)
     {
         CheckMainThread();
-        if ((int)selection <= 0 || ((int)selection & ~511) != 0)
+        if ((int)selection <= 0 || ((int)selection & ~1023) != 0)
             throw new ArgumentOutOfRangeException(nameof(selection));
         if ((selection & WindomVerificationSelection.BaselineComparison) != 0 && (selection & WindomVerificationSelection.Golden) == 0)
             throw new ArgumentException("BaselineComparison requires Golden in the same run.", nameof(selection));
@@ -203,6 +204,21 @@ public static class WindomVerificationRunner
         if (!string.IsNullOrEmpty(mechFolder)) { files.Add(Path.Combine(mechFolder, "Script.ani")); files.Add(Path.Combine(mechFolder, "Script.spt")); }
         job.hashes = await Task.Run(() => HashFiles(files, token), token);
         await SaveAsync(job);
+        if ((selection & WindomVerificationSelection.Presentation) != 0)
+            await RunSuite(job, "Presentation", token, async () => {
+                var templateObject = new GameObject("VerificationPresentationTemplate");
+                try
+                {
+                    var template = templateObject.AddComponent<TestPlayPresentationRuntime>();
+                    TestPlayOriginalSoundSetup.ApplyMappings(template);
+                    TestPlayOriginalTextureSetup.ApplyMappings(template, out _);
+                    var report = await TestPlayPresentationVerification.RunAsync(
+                        Path.Combine(projectRoot, "Windom_Data", "Robo", "ガンダムTR-1ヘイズル改", "Script.ani"),
+                        Path.Combine(job.outputFolder, "presentation"), null, token, template);
+                    return new WindomVerificationSuiteResult { name = "Presentation", assertions = report.assertions, scenarios = report.shots.Count };
+                }
+                finally { UnityEngine.Object.DestroyImmediate(templateObject); }
+            });
         if ((selection & WindomVerificationSelection.Lifecycle) != 0)
             await RunSuite(job, "Lifecycle", token, async () => new WindomVerificationSuiteResult {
                 name = "Lifecycle", assertions = (await TestPlaySessionLifecycleVerification.RunAsync(

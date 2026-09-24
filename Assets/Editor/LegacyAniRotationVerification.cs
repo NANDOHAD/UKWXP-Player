@@ -9,6 +9,14 @@ public static class LegacyAniRotationVerification
 {
     static int assertions;
 
+    // Shared transform math remains covered without requiring legacy ANI mech fixtures.
+    internal static int RunSyntheticForJob()
+    {
+        assertions = 0;
+        TestTrsDecomposition();
+        return assertions;
+    }
+
     internal static async Task<int> RunForJobAsync()
     {
         assertions = 0;

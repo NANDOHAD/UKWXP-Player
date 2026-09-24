@@ -37,6 +37,8 @@ public readonly struct TestPlayTargetSnapshot
     public readonly Vector3 Position;
     public readonly Quaternion Rotation;
     public readonly float Radius;
+    public readonly Vector3 ShotCapsuleStart, ShotCapsuleEnd;
+    public readonly float ShotCapsuleRadius;
     public readonly bool Alive;
     public readonly int StateId;
     public TestPlayTargetSnapshot(MechRuntime mech)
@@ -45,6 +47,21 @@ public readonly struct TestPlayTargetSnapshot
         Position = mech.Controller.robo.root.transform.position;
         Rotation = mech.Controller.robo.root.transform.rotation;
         Radius = mech.TargetRadius;
+        // Unity collision adapter: freeze the actual CharacterController shape
+        // with the tick snapshot. Position remains the root for lock/movement.
+        var root = mech.Controller.robo.root.transform;
+        var collider = root.GetComponent<CharacterController>();
+        ShotCapsuleStart = ShotCapsuleEnd = Position;
+        ShotCapsuleRadius = Radius;
+        if (collider != null && collider.enabled && collider.gameObject.activeInHierarchy)
+        {
+            Vector3 scale = root.lossyScale;
+            ShotCapsuleRadius = collider.radius * Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.z));
+            float halfAxis = Mathf.Max(0f, collider.height * Mathf.Abs(scale.y) * 0.5f - ShotCapsuleRadius);
+            Vector3 center = root.TransformPoint(collider.center);
+            ShotCapsuleStart = center - root.up * halfAxis;
+            ShotCapsuleEnd = center + root.up * halfAxis;
+        }
         Alive = mech.IsAlive;
         StateId = mech.Controller.state.GetInt(156);
     }

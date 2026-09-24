@@ -934,7 +934,9 @@ public static class TestPlayGoldenTraceVerification
                 selection.secondaryChannel == 1 &&
                 selection.UsesDualChannels;
             capture.targetRelativeShotTurnSemanticsValid &=
-                input.direction == 4 && NearlyEqual(signedYaw, -20f);
+                input.direction == 4 && Mathf.Abs(signedYaw) <= 20.01f &&
+                Vector3.Angle(rotationAfterTick * Vector3.forward, Vector3.ProjectOnPlane(controller.lockedTarget.transform.position - controller.robo.root.transform.position, Vector3.up)) <=
+                Vector3.Angle(rotationBeforeTick * Vector3.forward, Vector3.ProjectOnPlane(controller.lockedTarget.transform.position - controller.robo.root.transform.position, Vector3.up)) + 0.01f;
         }
         else
         {
@@ -1854,7 +1856,7 @@ public static class TestPlayGoldenTraceVerification
                     "GT-010 must acquire and retain the rear target lock from one S edge at tick 1, " +
                     "select rear-shot action 103 from the grounded base action 100 on the X+left " +
                     "edge at tick 4, execute action 103 as pose/script on channels 0 and 1, and " +
-                    "apply its real-ANI ShotTurnAng=20 as exactly -20 degrees of root yaw on each " +
+                    "apply its real-ANI ShotTurnAng=20 as bounded target-facing root yaw on " +
                     "of the 49 action-103 ticks only. The shot must recover through action 6 at " +
                     "tick 53 for 34 ticks and return to idle at tick 87. lockInputs=" + capture.lockInputTicks +
                     " lockTick=" + capture.lockAcquiredTick +

@@ -64,7 +64,7 @@ public sealed class TestPlaySessionBootstrap : MonoBehaviour
                 CreateSpawn(firstPath, playerSlot, new Vector3(-3, 0, 0), Quaternion.identity,
                     keyboard, cameraAdapter, showHud: true, hudCanvas, presentationTemplate),
                 CreateSpawn(secondPath, opponentSlot, new Vector3(3, 0, 12), Quaternion.Euler(0, 180, 0),
-                    new TestPlayIdleInputProvider(), null, showHud: false, null, null)
+                    new TestPlayIdleInputProvider(), null, showHud: false, null, presentationTemplate)
             }, TestPlaySessionClock.Automatic, token);
             token.ThrowIfCancellationRequested();
             Session.Start();

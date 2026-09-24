@@ -6,7 +6,7 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-/// <summary>Explicit single-scene build; does not replace the editor Build Settings scenes.</summary>
+/// <summary>Explicit selection/battle build; does not replace the editor Build Settings scenes.</summary>
 public static class TestPlayStandaloneBuild
 {
     public const string ScenePath = "Assets/Scenes/StandaloneTestPlay.unity";
@@ -40,20 +40,10 @@ public static class TestPlayStandaloneBuild
     {
         try
         {
-            if (!File.Exists(ScenePath))
-            {
-                var original = SceneManager.GetActiveScene();
-                var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
-                try
-                {
-                    SceneManager.SetActiveScene(scene);
-                    new GameObject("StandaloneApp").AddComponent<TestPlayStandaloneApp>();
-                    if (!EditorSceneManager.SaveScene(scene, ScenePath)) throw new IOException("専用シーンの保存に失敗しました。");
-                }
-                finally { EditorSceneManager.CloseScene(scene, true); SceneManager.SetActiveScene(original); }
-            }
+            if (!File.Exists(ScenePath) || !File.Exists(TestPlayStandaloneApp.SelectionScene))
+                throw new IOException("選択・戦闘シーンを用意してください。");
             var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions {
-                scenes = new[] { ScenePath }, locationPathName = Path.Combine(output, "WindomStandalone.exe"),
+                scenes = new[] { TestPlayStandaloneApp.SelectionScene, ScenePath }, locationPathName = Path.Combine(output, "WindomStandalone.exe"),
                 target = BuildTarget.StandaloneWindows64, options = BuildOptions.Development
             });
             Status = report.summary.result == BuildResult.Succeeded ? "Succeeded" : "Failed";

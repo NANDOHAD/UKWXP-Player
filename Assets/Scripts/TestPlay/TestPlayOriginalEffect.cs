@@ -6,6 +6,8 @@ public class TestPlayOriginalEffect : MonoBehaviour
     public Vector2 displaySize = Vector2.one;
     public float lifeSeconds;
     public bool billboard = true;
+    // Optional world-space streak direction; zero retains ordinary billboarding.
+    public Vector3 billboardAxis;
 
     Material runtimeMaterial;
     Color tint = Color.white;
@@ -68,13 +70,25 @@ public class TestPlayOriginalEffect : MonoBehaviour
         }
     }
 
+    public void FaceCamera(Camera camera)
+    {
+        if (!billboard || camera == null) return;
+        transform.rotation = camera.transform.rotation;
+        if (billboardAxis.sqrMagnitude > 0.000001f)
+        {
+            Vector3 projected = camera.transform.InverseTransformDirection(billboardAxis);
+            float angle = Mathf.Atan2(projected.y, projected.x) * Mathf.Rad2Deg - 90f;
+            transform.rotation *= Quaternion.Euler(0f, 0f, angle);
+        }
+    }
+
     void LateUpdate()
     {
         if (billboard)
         {
             Camera camera = Camera.main;
             if (camera != null)
-                transform.rotation = camera.transform.rotation;
+                FaceCamera(camera);
         }
 
         if (lifeSeconds <= 0f)

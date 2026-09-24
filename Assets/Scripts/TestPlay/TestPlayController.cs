@@ -56,6 +56,7 @@ public class TestPlayController : MonoBehaviour
         if (hit.decision != TestPlayCombatHitDecision.Damaged) return hit;
         currentHP = Mathf.Max(0, currentHP - Mathf.Max(0, hit.damage));
         SpawnSessionHitEffect(melee, attackerPosition, snapshot);
+        EmitSessionHitSound(melee);
         LastSessionImpactForce = hit.impactForce;
         LastSessionDownValue = hit.down;
         LastSessionCollisionKind = hit.collisionKind;
@@ -68,7 +69,11 @@ public class TestPlayController : MonoBehaviour
                 airborne = airborneFlag
             });
         SessionAccumulatedDown = reaction.accumulatedDown;
-        velocity += hit.impactForce;
+        // Original character melee impact assigns +0xA7C..A84, rather than
+        // accumulating each overlapping type57 hit during hit-stop. Additive
+        // impulses launched the victim beyond the next combo's travel budget.
+        if (melee) velocity = hit.impactForce;
+        else velocity += hit.impactForce;
         if (hit.impactForce.y > 0f) SetAirborneFlag(true);
         if (hit.clearLinkedTarget) ClearTargetLock();
         if (hit.forceFacingToAttacker && toAttacker.sqrMagnitude > 0.000001f)
@@ -114,9 +119,33 @@ public class TestPlayController : MonoBehaviour
         var selection = ResolveActionSelection(action);
         bool hasPose = HasUsableAction(selection.poseActionId) &&
             robo.ani.animations[selection.poseActionId].frames?.Count > 0;
-        if (hasPose) ChangeAnimation(selection, true);
+        if (hasPose)
+        {
+            ChangeAnimation(selection, true);
+            // Unity adapter: a hit must be visible before hit-stop freezes the
+            // defender. The ordinary action blend otherwise holds the old idle
+            // pose, and repeated hits keep restarting that blend.
+            ClearPoseTransition();
+            ApplyPose();
+        }
         else HoldCurrentAnimationAtLastPose();
         return hasPose;
+    }
+
+    void EmitSessionHitSound(bool melee)
+    {
+        // Original resource IDs: 7 = BeamHit.wav, 11 = BeamHit2.wav.
+        // Selecting these for accepted shot/melee damage is a Unity adapter.
+        string key = melee ? "11" : "7";
+        var args = new List<TestPlayScriptValue> { TestPlayScriptValue.Number(melee ? 11f : 7f) };
+        var sound = TestPlayPresentationCore.CreateSound(args, presentationRuntime != null
+            ? presentationRuntime.ResolveAudioAdapter(TestPlayPresentationEventType.Sound, key)
+            : TestPlayPresentationAdapterKind.None);
+        sound.evidence = TestPlayPresentationEvidence.UnityAlternative;
+        sound.source = melee ? "SessionMeleeHit" : "SessionShotHit";
+        sound.diagnostic = "Unity adapter: accepted damage plays the mapped impact clip at the defender.";
+        RaisePresentationEvent(sound);
+        RaiseRuntimeEvent(TestPlayRuntimeEventType.Sound, "Snd", args, key);
     }
 
     void TickSessionReactionPose()
@@ -598,6 +627,8 @@ public class TestPlayController : MonoBehaviour
     int swordCancelAction = -1;
     float shotTurnAng;
     float turnMoveAng;
+    float meleeTargetTurnDegrees;
+    bool meleeSequenceHit;
     float camEffect;
     float vFMulti = 1f;
     Vector3 moveCommand;
@@ -647,6 +678,14 @@ public class TestPlayController : MonoBehaviour
     readonly HashSet<int> validBurnerIds = new HashSet<int>();
     readonly Dictionary<int, TestPlayBurnerCone> burnerCones = new Dictionary<int, TestPlayBurnerCone>();
     readonly List<GameObject> spawnedTransientObjects = new List<GameObject>();
+    sealed class PendingType1Shot
+    {
+        public TestPlayType1ProjectileParameters parameters;
+        public TestPlayProjectilePayload payload;
+        public WeaponPointInfo weaponPoint;
+        public List<TestPlayScriptValue> args;
+    }
+    readonly List<PendingType1Shot> pendingType1Shots = new List<PendingType1Shot>();
     readonly List<ActiveSessionCombatEffect> activeSessionCombatEffects = new List<ActiveSessionCombatEffect>();
     readonly List<Renderer> sessionHiddenModelRenderers = new List<Renderer>();
     readonly List<bool> sessionHiddenModelRendererStates = new List<bool>();
@@ -703,6 +742,32 @@ public class TestPlayController : MonoBehaviour
     bool bodyDownAimRequested;
     bool arm1AimRequested;
     bool arm2AimRequested;
+    // FUN_004cd840: persistent per-joint limits, blend and held quaternion.
+    // Arm bindings come from SPT, not the spelling of arm_rotation.x.
+    readonly OriginalAimState bodyUpAim = new OriginalAimState();
+    readonly OriginalAimState bodyDownAim = new OriginalAimState();
+    readonly OriginalAimState arm1Aim = new OriginalAimState();
+    readonly OriginalAimState arm2Aim = new OriginalAimState();
+    float subLRKey;
+
+    sealed class OriginalAimState
+    {
+        public float negativeLimit, positiveLimit, weight;
+        public Quaternion rotation = Quaternion.identity;
+        public bool Configure(List<TestPlayScriptValue> args)
+        {
+            negativeLimit = args.Count > 0 ? args[0].AsFloat() : 0f;
+            positiveLimit = args.Count > 1 ? args[1].AsFloat() : 0f;
+            return negativeLimit >= 0f && positiveLimit >= 0f;
+        }
+        public Quaternion Release()
+        {
+            weight = Mathf.Max(0f, weight - 0.1f);
+            if (weight == 0f) rotation = Quaternion.identity;
+            return Quaternion.Slerp(Quaternion.identity, rotation, weight);
+        }
+        public void Reset() { weight = 0f; rotation = Quaternion.identity; }
+    }
     int lastSyncedMovementEnergyInt;
     float lastSyncedMovementEnergyFloat;
     int lastSyncedAuxiliaryEnergyInt;
@@ -770,6 +835,8 @@ public class TestPlayController : MonoBehaviour
         public TestPlayOriginalEffect[] textureLayers;
         public Vector2[] baseSizes;
         public Color[] baseTints;
+        public Vector3[] basePositions;
+        public bool shotBurst;
         public Vector3 baseScale;
         public int elapsedTicks;
         public int totalTicks;
@@ -897,6 +964,19 @@ public class TestPlayController : MonoBehaviour
         UpdateInputState();
         UpdateTargetLock();
         UpdateTargetState();
+        if (animationHitStopped)
+        {
+            // Preserve C edges, but freeze pose, cancel windows and motion.
+            if (attackSequenceActive && !meleeApproachActive &&
+                IsMeleeAttackAction(currentAnimationIndex) && meleeKeyPressedThisTick)
+                meleeComboInputPending = true;
+            // Spawned hit volumes keep their own lifetime/target interval clock.
+            TickActiveMeleeAttacks();
+            TickActiveSwordBeams();
+            ConsumeLatchedInput();
+            simulatingCombatTick = simulatingPresentationTick = false;
+            return;
+        }
         UpdateOriginalMovementEnergy();
         UpdateActionFromInput();
         if (!animationHitStopped)
@@ -908,8 +988,10 @@ public class TestPlayController : MonoBehaviour
         TickActiveBurnerBurstEffects();
         TickActiveHinokoEffects();
         TickActiveMagicShieldEffects();
+        if (hitStopTicks <= 0)
+            ApplyRootMotion();
         ApplyQueuedAimCommands();
-        ApplyRootMotion();
+        FlushPendingType1Shots();
         ConsumeLatchedInput();
         simulatingCombatTick = false;
         simulatingPresentationTick = false;
@@ -1057,6 +1139,7 @@ public class TestPlayController : MonoBehaviour
         presentationRuntime?.StopPresentation();
         hudRuntime?.HideHud();
         activeMeleeAttacks.Clear();
+        pendingType1Shots.Clear();
         DestroyTransientObjects();
         RestoreSessionModelVisibility();
     }
@@ -1333,13 +1416,23 @@ public class TestPlayController : MonoBehaviour
         attackFlag = 0;
         camEffect = 0f;
         vFMulti = 1f;
+        if (IsMeleeAttackAction(currentAnimationIndex))
+        {
+            // FUN_004b8250 clears these on main-channel block entry.
+            swordCancelAction = -1;
+            meleeTargetTurnDegrees = 0f;
+            turnMoveAng = 0f;
+            shotTurnAng = 0f;
+        }
         EnsureAttackProfile();
-        attackProfile.Reset();
+        // FUN_004b8250 resets block flags, but not AttackPow/DownF/Force.
+        // Later melee blocks commonly spawn type57 without repeating ATTACK.
+        if (!IsMeleeAttackAction(currentAnimationIndex))
+            attackProfile.Reset();
         burnerRequestedOutputs.Clear();
-        bodyUpAimRequested = false;
-        bodyDownAimRequested = false;
-        arm1AimRequested = false;
-        arm2AimRequested = false;
+        // FUN_004b8250 preserves joint aim flags/limits across blocks.
+        shotTurnAng = 0f;
+        subLRKey = 0f;
     }
 
     static bool IsScriptTerminator(script scriptBlock)
@@ -1472,6 +1565,7 @@ public class TestPlayController : MonoBehaviour
             return;
 
         Transform root = robo.root.transform;
+        ApplyMeleeTargetSteering(root);
         ApplyOriginalShotSteering(root);
         if (stepSequenceActive && IsStepAction(currentAnimationIndex) && ShouldFinishOriginalStyleStep())
         {
@@ -1593,6 +1687,9 @@ public class TestPlayController : MonoBehaviour
 
     float GetScriptedMoveRetention(int logicalActionId)
     {
+        // FUN_004d3280: approach retains 1.0; ordinary melee retains 0.9.
+        if (IsMeleeAttackAction(logicalActionId))
+            return logicalActionId == meleeAction ? 1f : 0.9f;
         if (logicalActionId == idleAction)
             return Mathf.Clamp01(idleMoveRetention);
         if (logicalActionId == moveAction)
@@ -2285,6 +2382,7 @@ public class TestPlayController : MonoBehaviour
 
     void StartNormalAttackAction(int actionId)
     {
+        meleeSequenceHit = false;
         bool startsAttack = IsShotAttackAction(actionId) ||
                             IsMeleeAttackAction(actionId);
         groundedStationaryShotRecoveryPresentationRequested =
@@ -2362,6 +2460,9 @@ public class TestPlayController : MonoBehaviour
         {
             RecordCombatTransition(decision.transitionActionId, decision.reason);
             ChangeAnimation(decision.transitionActionId);
+            // FUN_004d9030: +0xA88 is 0.5 before contact, 0.9 after a hit.
+            if (decision.reason == TestPlayCombatDecisionReason.SwordCancel)
+                scriptedMoveRetention = meleeSequenceHit ? 0.9f : 0.5f;
         }
         return true;
     }
@@ -3182,6 +3283,22 @@ public class TestPlayController : MonoBehaviour
         root.rotation = Quaternion.LookRotation(heading, Vector3.up);
     }
 
+    void ApplyMeleeTargetSteering(Transform root)
+    {
+        if (!IsMeleeAttackAction(currentAnimationIndex)) return;
+        Transform locked = GetLockedTargetTransform();
+        if (locked == null) return;
+        // Unity adapter: apply the ANI angular budget to the movement root.
+        // Vertical motion remains owned by ANI and collider grounding.
+        Vector3 offset = locked.position - root.position;
+        offset.y = 0f;
+        if (offset.sqrMagnitude < 0.000001f) return;
+        float degrees = Mathf.Max(0f, meleeTargetTurnDegrees, turnMoveAng);
+        if (meleeApproachActive) degrees = Mathf.Max(degrees, shotTurnAng);
+        root.rotation = Quaternion.RotateTowards(root.rotation,
+            Quaternion.LookRotation(offset, Vector3.up), degrees);
+    }
+
     void ApplyOriginalShotSteering(Transform root)
     {
         if (root == null || !attackSequenceActive ||
@@ -3191,9 +3308,20 @@ public class TestPlayController : MonoBehaviour
         int direction = state != null ? state.GetInt(190) : 0;
         float yaw = 0f;
         if (direction == 4)
-            yaw = -Mathf.Abs(shotTurnAng);
+            yaw = -Mathf.Max(0f, subLRKey);
         else if (direction == 6)
-            yaw = Mathf.Abs(shotTurnAng);
+            yaw = Mathf.Max(0f, subLRKey);
+
+        // ShotTurnAng (+0xB5C) turns toward the target; Sub_LRKey (+0xB64)
+        // is the separate input-controlled yaw in FUN_004d8e30.
+        Transform locked = GetLockedTargetTransform();
+        if (locked != null && shotTurnAng > 0f)
+        {
+            Vector3 offset = locked.position - root.position;
+            offset.y = 0f;
+            if (offset.sqrMagnitude > 0.000001f)
+                yaw += Mathf.Clamp(Vector3.SignedAngle(root.forward, offset, Vector3.up), -shotTurnAng, shotTurnAng);
+        }
 
         if (!Mathf.Approximately(yaw, 0f))
             root.rotation = Quaternion.AngleAxis(yaw, Vector3.up) * root.rotation;
@@ -3867,6 +3995,10 @@ public class TestPlayController : MonoBehaviour
         groundRecoveryDurationTicks = 0;
         groundRecoveryCompletedThisTick = true;
         ResetOriginalBlockState();
+        // Preserve the existing Unity recovery fallback for malformed/scriptless
+        // actions, without clearing original aim state at every ordinary block.
+        bodyUpAimRequested = bodyDownAimRequested = false;
+        arm1AimRequested = arm2AimRequested = false;
         ChangeAnimation(idleAction);
         // Apply the standing HOD immediately. This prevents the recovery pose
         // from remaining visible until another simulation tick when the idle
@@ -3987,24 +4119,25 @@ public class TestPlayController : MonoBehaviour
                 LogMotionAssignment("MoveLock", rawLine);
                 break;
             case "lockbodyuptarget":
-                bodyUpAimRequested = true;
+                bodyUpAimRequested = bodyUpAim.Configure(args);
                 break;
             case "lockbodydowntarget":
-                bodyDownAimRequested = true;
+                bodyDownAimRequested = bodyDownAim.Configure(args);
+                meleeTargetTurnDegrees = args.Count > 0 ? Mathf.Max(0f, args[0].AsFloat()) : 0f;
                 break;
             case "lockbodytarget":
-                bodyUpAimRequested = true;
-                bodyDownAimRequested = true;
+                bodyUpAimRequested = bodyUpAim.Configure(args);
+                bodyDownAimRequested = bodyDownAim.Configure(args);
                 break;
             case "lockarm1target":
-                arm1AimRequested = true;
+                arm1AimRequested = arm1Aim.Configure(args);
                 break;
             case "lockarm2target":
-                arm2AimRequested = true;
+                arm2AimRequested = arm2Aim.Configure(args);
                 break;
             case "lockarmtarget":
-                arm1AimRequested = true;
-                arm2AimRequested = true;
+                arm1AimRequested = arm1Aim.Configure(args);
+                arm2AimRequested = arm2Aim.Configure(args);
                 break;
             case "attack": HandleAttack(args); break;
             case "attackpow": SetAttackPower(args); break;
@@ -4094,6 +4227,7 @@ public class TestPlayController : MonoBehaviour
                 break;
             case "gvenable": gvEnable = values.Count > 0 && values[0].AsBool(); break;
             case "shotturnang": shotTurnAng = values.Count > 0 ? values[0].AsFloat() : 0f; break;
+            case "sub_lrkey": subLRKey = values.Count > 0 ? values[0].AsFloat() : 0f; break;
             case "turnmoveang": turnMoveAng = values.Count > 0 ? values[0].AsFloat() : 0f; break;
             case "shildguard": shieldGuard = values.Count > 0 ? values[0].AsInt() : 0; break;
             case "laserreflect":
@@ -4165,18 +4299,95 @@ public class TestPlayController : MonoBehaviour
 
     void ApplyQueuedAimCommands()
     {
-        Transform activeLockTarget = GetLockedTargetTransform();
-        if (activeLockTarget == null)
-            return;
+        Transform locked = GetLockedTargetTransform();
+        Transform root = robo != null && robo.root != null ? robo.root.transform : transform;
+        Vector3 direction = locked != null ? locked.position - root.position : root.forward;
+        Vector3 horizontal = Vector3.ProjectOnPlane(direction, Vector3.up);
+        // Original target-relative right axis (+0xA70), not each body's local X.
+        Vector3 right = horizontal.sqrMagnitude > 0.000001f
+            ? Vector3.Cross(Vector3.up, horizontal).normalized : root.right;
+        float pitch = Mathf.Atan2(direction.y, horizontal.magnitude) * Mathf.Rad2Deg;
+        float lower = ApplyBodyAim(ResolveBodyAimRoot(bodyDownAimRoot, "Body_d.x"),
+            bodyDownAim, bodyDownAimRequested, pitch, right, 0f);
+        ApplyBodyAim(ResolveBodyAimRoot(bodyUpAimRoot, "Body.x"),
+            bodyUpAim, bodyUpAimRequested, pitch, right, lower);
+        ApplyArmAim(ResolveArmAimRoot(0, arm1AimRoot), arm1Aim, arm1AimRequested, locked, direction);
+        ApplyArmAim(ResolveArmAimRoot(1, arm2AimRoot), arm2Aim, arm2AimRequested, locked, direction);
+    }
 
-        if (bodyUpAimRequested)
-            RotateAimTransform(bodyUpAimRoot, activeLockTarget);
-        if (bodyDownAimRequested)
-            RotateAimTransform(bodyDownAimRoot, activeLockTarget);
-        if (arm1AimRequested)
-            RotateAimTransform(ResolveArmAimRoot(0, arm1AimRoot), activeLockTarget);
-        if (arm2AimRequested)
-            RotateAimTransform(ResolveArmAimRoot(1, arm2AimRoot), activeLockTarget);
+    Transform ResolveBodyAimRoot(Transform inspectorOverride, string originalName)
+    {
+        if (inspectorOverride != null) return inspectorOverride;
+        // Original model binding explicitly looks up Body.x / Body_d.x.
+        if (robo?.parts != null)
+            foreach (GameObject part in robo.parts)
+                if (part != null && string.Equals(part.name, originalName, StringComparison.OrdinalIgnoreCase))
+                    return part.transform;
+        return null;
+    }
+
+    static float ApplyBodyAim(Transform body, OriginalAimState aim, bool enabled,
+        float pitch, Vector3 right, float lowerPitch)
+    {
+        if (body == null) return 0f;
+        Quaternion correction;
+        float applied = 0f;
+        if (!enabled) correction = aim.Release();
+        else
+        {
+            if (aim.negativeLimit < 999f)
+            {
+                applied = Mathf.Min(Mathf.Abs(pitch) * aim.weight - lowerPitch,
+                    pitch >= 0f ? aim.positiveLimit : aim.negativeLimit);
+                aim.rotation = Quaternion.AngleAxis(pitch >= 0f ? -applied : applied, right);
+                aim.weight = Mathf.Min(1f, aim.weight + 0.1f);
+            }
+            correction = aim.rotation;
+        }
+        // Original world-space pitch preserves the pivot translation.
+        body.rotation = correction * body.rotation;
+        return applied;
+    }
+
+    static void ApplyArmAim(Transform arm, OriginalAimState aim, bool enabled,
+        Transform locked, Vector3 fallbackDirection)
+    {
+        if (arm == null) return;
+        Quaternion correction;
+        if (!enabled) correction = aim.Release();
+        else
+        {
+            if (aim.negativeLimit < 999f)
+            {
+                // FUN_004cd840 projects target into the arm's local XY plane,
+                // measures from -Y, and rotates about local Z only. No gun IK.
+                Vector3 local = arm.InverseTransformVector(locked != null
+                    ? locked.position - arm.position : fallbackDirection);
+                local.z = 0f;
+                local.Normalize();
+                float dot = -local.y;
+                aim.rotation = Quaternion.identity;
+                if (dot > -1f && dot < 1f)
+                {
+                    float angle = Mathf.Acos(dot) * Mathf.Rad2Deg * aim.weight;
+                    angle = Mathf.Min(angle, local.x <= 0f ? aim.negativeLimit : aim.positiveLimit);
+                    aim.rotation = Quaternion.AngleAxis(local.x <= 0f ? -angle : angle, Vector3.forward);
+                }
+                aim.weight = Mathf.Min(1f, aim.weight + 0.1f);
+            }
+            correction = aim.rotation;
+        }
+        arm.localRotation = arm.localRotation * correction;
+    }
+
+    void FlushPendingType1Shots()
+    {
+        try
+        {
+            foreach (PendingType1Shot shot in pendingType1Shots)
+                EmitOriginalType1Projectile(shot);
+        }
+        finally { pendingType1Shots.Clear(); }
     }
 
     Transform ResolveArmAimRoot(int attackArmId, Transform inspectorOverride)
@@ -4192,22 +4403,6 @@ public class TestPlayController : MonoBehaviour
             info != null)
             return info.BoneTr;
         return null;
-    }
-
-    void RotateAimTransform(Transform aimRoot, Transform activeLockTarget)
-    {
-        if (aimRoot == null || activeLockTarget == null)
-            return;
-
-        Vector3 toTarget = activeLockTarget.position - aimRoot.position;
-        if (toTarget.sqrMagnitude < 0.0001f)
-            return;
-
-        Quaternion desired = Quaternion.LookRotation(toTarget.normalized, Vector3.up);
-        aimRoot.rotation = Quaternion.RotateTowards(
-            aimRoot.rotation,
-            desired,
-            Mathf.Max(0f, aimTurnSpeed) * GetOriginalTickDeltaTime());
     }
 
     void HandleAttack(List<TestPlayScriptValue> args)
@@ -4678,19 +4873,41 @@ public class TestPlayController : MonoBehaviour
         if (parameters.energyCost > 0)
             SetAuxiliaryEnergy(currentAuxiliaryEnergy - parameters.energyCost);
 
+        EnsureAttackProfile();
+        var shot = new PendingType1Shot {
+            parameters = parameters,
+            weaponPoint = weaponPoint,
+            args = new List<TestPlayScriptValue>(args),
+            payload = TestPlayCombatCore.CreateProjectilePayload(
+                attackProfile, EstimateDamageForWeapon(1), parameters.distancePerTick * originalTickRate,
+                false, source, attackFlag, TestPlayAttackCollisionKind.OriginalType1)
+        };
+        // Capture script values now; resolve the visible muzzle after this tick's
+        // ANI pose, root motion and aim. New session projectiles still move next tick.
+        if (simulatingCombatTick)
+            pendingType1Shots.Add(shot);
+        else
+            EmitOriginalType1Projectile(shot);
+    }
+
+    void EmitOriginalType1Projectile(PendingType1Shot shot)
+    {
+        const string source = "RunProc2:1";
+        var parameters = shot.parameters;
+        var payload = shot.payload;
+        var weaponPoint = shot.weaponPoint;
+        var args = shot.args;
+        if (weaponPoint?.BoneTr == null)
+            return;
+
         // A collision candidate is not an acquired lock. Snapshot guidance only
         // from a valid lock so an unlocked shot keeps the WEAPONPOINT direction.
         Transform guidanceTarget = GetLockedTargetTransform();
         bool targetLinked = guidanceTarget != null;
         Vector3 spawnPosition = weaponPoint.BoneTr.position;
-        Quaternion muzzleRotation = Quaternion.LookRotation(
+        Quaternion spawnRotation = Quaternion.LookRotation(
             weaponPoint.WorldForward,
             weaponPoint.BoneTr.up);
-        Quaternion spawnRotation = TestPlayCombatCore.ResolveOriginalType1InitialRotation(
-            muzzleRotation,
-            spawnPosition,
-            targetLinked,
-            targetLinked ? guidanceTarget.position : Vector3.zero);
         float targetDistance = targetLinked
             ? Vector3.Distance(spawnPosition, guidanceTarget.position)
             : TestPlayCombatCore.OriginalType1HomingDistance;
@@ -4699,16 +4916,6 @@ public class TestPlayController : MonoBehaviour
                 targetDistance,
                 parameters.homingPercent)
             : 0f;
-
-        EnsureAttackProfile();
-        TestPlayProjectilePayload payload = TestPlayCombatCore.CreateProjectilePayload(
-            attackProfile,
-            EstimateDamageForWeapon(1),
-            parameters.distancePerTick * originalTickRate,
-            homingTurnDegrees > 0f,
-            source,
-            attackFlag,
-            TestPlayAttackCollisionKind.OriginalType1);
 
         // Original EXE registers shot.wav as fixed Snd(0), but its type-1
         // handler also emits a spatial sound directly after creating LZ_Beam.
@@ -4930,6 +5137,8 @@ public class TestPlayController : MonoBehaviour
 
     void ApplyMeleeDefenseFeedback(TestPlayCombatHitResult hit)
     {
+        if (hit.decision == TestPlayCombatHitDecision.Damaged)
+            meleeSequenceHit = true;
         if (hit.decision == TestPlayCombatHitDecision.Damaged && hit.hitStopTicks > 0)
             hitStopTicks = Mathf.Max(hitStopTicks, hit.hitStopTicks);
 
@@ -4954,8 +5163,15 @@ public class TestPlayController : MonoBehaviour
         Vector3 towardSource = attackerPosition - center;
         if (towardSource.sqrMagnitude < 0.000001f)
             towardSource = -(snapshot.Rotation * Vector3.forward);
-        Vector3 position = center + towardSource.normalized * Mathf.Min(modelRadius * 0.45f, 1.2f);
-        float size = Mathf.Clamp(modelRadius * (melee ? 1.15f : 0.8f), 0.6f, 2.5f);
+        Vector3 position = center + towardSource.normalized * Mathf.Min(modelRadius * (melee ? 0.45f : 0.85f), 1.2f);
+        float size = Mathf.Clamp(modelRadius * (melee ? 1.15f : 1.6f), 0.6f, melee ? 2.5f : 3.5f);
+        if (!melee && (snapshot.ShotCapsuleEnd - snapshot.ShotCapsuleStart).sqrMagnitude > 0f)
+        {
+            center = (snapshot.ShotCapsuleStart + snapshot.ShotCapsuleEnd) * 0.5f;
+            towardSource = attackerPosition - center;
+            if (towardSource.sqrMagnitude < 0.000001f) towardSource = -(snapshot.Rotation * Vector3.forward);
+            position = center + towardSource.normalized * (snapshot.ShotCapsuleRadius + 0.15f);
+        }
 
         GameObject root = presentationRuntime.CreateMappedEffect(key, position, Quaternion.identity);
         TestPlayPresentationAdapterKind adapter = root != null
@@ -4983,9 +5199,34 @@ public class TestPlayController : MonoBehaviour
                 layer.transform.SetParent(root.transform, true);
                 adapter = TestPlayPresentationAdapterKind.OriginalTextureQuad;
             }
+            if (!melee && adapter == TestPlayPresentationAdapterKind.OriginalTextureQuad)
+            {
+                // Unity composition using original assets: the ring alone has
+                // an empty center and weak contrast. Add a brief impact flash.
+                AddSessionTextureLayer(root.transform, "beamHit2.png", position,
+                    Vector2.one * size, Color.white);
+                // Unity burst composition: deterministic directions, no shared Random state.
+                Quaternion spread = Quaternion.LookRotation(towardSource.normalized);
+                for (int spark = 0; spark < 16; spark++)
+                {
+                    float angle = spark * 2.39996323f;
+                    float depth = 0.15f + 0.65f * ((spark % 5) / 4f);
+                    float radial = Mathf.Sqrt(1f - depth * depth);
+                    Vector3 direction = spread * new Vector3(Mathf.Cos(angle) * radial, Mathf.Sin(angle) * radial, depth);
+                    GameObject shard = presentationRuntime.CreateOriginalNamedTextureEffect(
+                        "beamHit2.png", position + direction * 0.12f, Quaternion.identity,
+                        new Vector2(size * 0.075f, size * (spark % 3 == 0 ? 0.65f : 0.4f)),
+                        0f, spark % 3 == 0 ? Color.white : new Color(1f, 0.72f, 0.25f, 1f));
+                    if (shard == null) continue;
+                    shard.name = "TestPlayShotSpark_" + spark;
+                    shard.transform.SetParent(root.transform, true);
+                    shard.GetComponent<TestPlayOriginalEffect>().billboardAxis = direction * (4f + spark % 4);
+                }
+            }
         }
 
-        RegisterSessionCombatEffect(root, SessionHitEffectTicks, false);
+        int effectTicks = melee ? SessionHitEffectTicks : 30;
+        RegisterSessionCombatEffect(root, effectTicks, false, !melee);
         SessionHitEffectSpawnCount++;
         RaisePresentationEvent(TestPlayPresentationCore.CreateVisual(
             key,
@@ -4994,7 +5235,7 @@ public class TestPlayController : MonoBehaviour
             TestPlayPresentationEvidence.UnityAlternative,
             "OriginalHitEffectSelectionUnknown;UnityImpactPointApproximation"));
         RaiseRuntimeEvent(TestPlayRuntimeEventType.EffectSpawned, key, null, textureName, 0,
-            SessionHitEffectTicks / 60f);
+            effectTicks / 60f);
     }
 
     void BeginSessionDefeatPresentation()
@@ -5078,7 +5319,7 @@ public class TestPlayController : MonoBehaviour
         return fallback;
     }
 
-    void RegisterSessionCombatEffect(GameObject root, int totalTicks, bool defeat)
+    void RegisterSessionCombatEffect(GameObject root, int totalTicks, bool defeat, bool shotBurst = false)
     {
         if (root == null)
             return;
@@ -5090,10 +5331,12 @@ public class TestPlayController : MonoBehaviour
         TestPlayOriginalEffect[] layers = root.GetComponentsInChildren<TestPlayOriginalEffect>(true);
         var baseSizes = new Vector2[layers.Length];
         var baseTints = new Color[layers.Length];
+        var basePositions = new Vector3[layers.Length];
         for (int i = 0; i < layers.Length; i++)
         {
             baseSizes[i] = layers[i].displaySize;
             baseTints[i] = layers[i].CurrentTint;
+            basePositions[i] = layers[i].transform.position;
             SetSessionCombatSheetFrame(layers[i], 0f);
         }
         activeSessionCombatEffects.Add(new ActiveSessionCombatEffect
@@ -5102,6 +5345,8 @@ public class TestPlayController : MonoBehaviour
             textureLayers = layers,
             baseSizes = baseSizes,
             baseTints = baseTints,
+            basePositions = basePositions,
+            shotBurst = shotBurst,
             baseScale = root.transform.localScale,
             elapsedTicks = 0,
             totalTicks = Mathf.Max(1, totalTicks),
@@ -5144,7 +5389,21 @@ public class TestPlayController : MonoBehaviour
                     Color tint = layerIndex < active.baseTints.Length
                         ? active.baseTints[layerIndex]
                         : layer.CurrentTint;
-                    tint.a *= alpha;
+                    if (active.shotBurst)
+                    {
+                        bool spark = layer.billboardAxis.sqrMagnitude > 0f;
+                        float seconds = active.elapsedTicks / 60f;
+                        if (spark)
+                        {
+                            layer.transform.position = active.basePositions[layerIndex] + layer.billboardAxis * seconds
+                                + Vector3.down * (1.5f * seconds * seconds);
+                            layer.SetDisplaySize(baseSize * Mathf.Lerp(1f, 0.25f, progress));
+                        }
+                        float fade = spark ? Mathf.Clamp01((progress - 0.2f) / 0.8f)
+                            : Mathf.Clamp01((active.elapsedTicks - 3f) / 12f);
+                        tint.a *= 1f - fade;
+                    }
+                    else tint.a *= alpha;
                     layer.SetTint(tint);
                 }
             }
@@ -5311,6 +5570,7 @@ public class TestPlayController : MonoBehaviour
             attackProfile, damage, speed, homing, source, attackFlag, collisionKind);
 
         Vector3 spawnPosition = robo.root.transform.position + robo.root.transform.forward * 1.5f + Vector3.up * 1.2f;
+        Transform guidanceTarget = GetLockedTargetTransform();
         Quaternion spawnRotation = robo.root.transform.rotation;
         GameObject go = presentationRuntime != null
             ? presentationRuntime.CreateMappedEffect(source, spawnPosition, spawnRotation)
@@ -5357,7 +5617,7 @@ public class TestPlayController : MonoBehaviour
         projectile.collisionKind = payload.collisionKind;
         projectile.speed = payload.speed;
         projectile.hitRadius = projectileRadius;
-        projectile.homingTurnRate = payload.homing && GetLockedTargetTransform() != null ? 180f : 0f;
+        projectile.homingTurnRate = payload.homing && guidanceTarget != null ? 180f : 0f;
         session?.RegisterProjectile(projectile, sessionMech, sessionLock);
         projectile.sourceCommand = payload.source;
         projectile.valueSource = payload.valueSource;
@@ -6678,6 +6938,7 @@ public class TestPlayController : MonoBehaviour
         activeMeleeAttacks.Clear();
         currentCombatTraceEvents.Clear();
         pendingCombatTraceEvents.Clear();
+        pendingType1Shots.Clear();
         simulatingCombatTick = false;
         currentPresentationTraceEvents.Clear();
         pendingPresentationTraceEvents.Clear();
@@ -6685,6 +6946,8 @@ public class TestPlayController : MonoBehaviour
         heldWeapon = "GUN";
         shotTurnAng = 0f;
         turnMoveAng = 0f;
+        meleeTargetTurnDegrees = 0f;
+        meleeSequenceHit = false;
         camEffect = 0f;
         vFMulti = 1f;
         moveCommand = Vector3.zero;
@@ -6738,6 +7001,11 @@ public class TestPlayController : MonoBehaviour
         stepDirection = 0;
         lastDirectionTapTick = int.MinValue;
         ClearTargetLock();
+        bodyUpAim.Reset();
+        bodyDownAim.Reset();
+        arm1Aim.Reset();
+        arm2Aim.Reset();
+        subLRKey = 0f;
         bodyUpAimRequested = false;
         bodyDownAimRequested = false;
         arm1AimRequested = false;

@@ -114,7 +114,9 @@ public static class TestPlaySessionLifecycleVerification
                 // Fixture position only: normal target radius and real weapon points.
                 a.Assets.Robo.root.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
                 b.Assets.Robo.root.transform.SetPositionAndRotation(new Vector3(0, 0, round == 2 ? 3 : 12), Quaternion.Euler(0, 180, 0));
-                int ticks = round == 2 ? 900 : round == 1 ? 140 : 240;
+                // Real ATTACK values persist across melee blocks now; the old
+                // 900-tick fixture depended on erroneous fallback damage 80.
+                int ticks = round == 2 ? 3600 : round == 1 ? 140 : 240;
                 for (int tick = 0; tick < ticks; tick++)
                 {
                     token.ThrowIfCancellationRequested();
@@ -125,8 +127,13 @@ public static class TestPlaySessionLifecycleVerification
                     {
                         float separation = Vector3.Distance(a.Assets.Robo.root.transform.position,
                             b.Assets.Robo.root.transform.position);
-                        if (separation > 3.25f) frame.held.direction = 8;
-                        else if (tick % 45 == 0) frame.pressed.melee = true;
+                        bool melee = a.Controller.currentAnimationIndex >= 130 &&
+                            a.Controller.currentAnimationIndex <= 155;
+                        if (separation > 3.25f && !melee) frame.held.direction = 8;
+                        // Buffer the next C during the attack even after knockback
+                        // carries the opponent outside the initial start distance.
+                        if ((melee || separation <= 3.25f) && tick % 12 == 0)
+                            frame.pressed.melee = true;
                     }
                     if (round == 0 || round == 3)
                     {

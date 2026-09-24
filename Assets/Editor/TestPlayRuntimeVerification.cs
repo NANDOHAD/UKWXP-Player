@@ -34,6 +34,7 @@ public static class TestPlayRuntimeVerification
         VerifyBurnerDirectionAndVisual(ref assertions);
         VerifyOriginalSimulationClockAndLock(ref assertions);
         assertions += VerifyProjectileLockGating();
+        assertions += VerifyOriginalJointAim();
         VerifyCameraControllerLifecycle(ref assertions);
         VerifyMovementReferenceModes(ref assertions);
         VerifyOriginalDirectionMovement(ref assertions);
@@ -47,12 +48,95 @@ public static class TestPlayRuntimeVerification
         return assertions;
     }
 
+    public static int VerifyOriginalJointAim()
+    {
+        int assertions = 0;
+        var host = new GameObject("OriginalJointAimVerification");
+        var arm = new GameObject("SPT-selected-arm");
+        var lower = new GameObject("Body_d.x");
+        var upper = new GameObject("Body.x");
+        var targetObject = new GameObject("JointAimTarget");
+        try
+        {
+            var controller = host.AddComponent<TestPlayController>();
+            var robo = host.AddComponent<RoboStructure>();
+            robo.root = host;
+            robo.parts = new List<GameObject> { host, lower, upper, arm };
+            controller.robo = robo;
+            lower.transform.SetParent(host.transform, false);
+            upper.transform.SetParent(lower.transform, false);
+            arm.transform.SetParent(host.transform, false);
+            controller.arm1AimRoot = arm.transform;
+            var target = targetObject.AddComponent<TestPlayTargetDummy>();
+            controller.target = target;
+            controller.lockedTarget = target;
+            controller.targetLockActive = true;
+            var command = typeof(TestPlayController).GetMethod("HandleCommand", InstancePrivate);
+            var apply = typeof(TestPlayController).GetMethod("ApplyQueuedAimCommands", InstancePrivate);
+            void Set(string name, float a, float b) => command.Invoke(controller, new object[] { name, Values(a, b), "" });
+            void Tick()
+            {
+                // ANI replaces the base pose each tick; correction must not accumulate.
+                arm.transform.localRotation = Quaternion.identity;
+                lower.transform.localRotation = Quaternion.identity;
+                upper.transform.localRotation = Quaternion.identity;
+                apply.Invoke(controller, null);
+            }
+            targetObject.transform.position = new Vector3(10, -10, 30);
+            Set("LockArm1Target", 20, 35);
+            Tick();
+            Require(Quaternion.Angle(arm.transform.localRotation, Quaternion.identity) < 0.01f,
+                "original arm blend starts at zero", ref assertions);
+            Tick();
+            Require(Quaternion.Angle(arm.transform.localRotation, Quaternion.Euler(0, 0, 4.5f)) < 0.05f,
+                "arm uses projected local XY from -Y with 0.1 blend increments", ref assertions);
+            for (int i = 0; i < 10; i++) Tick();
+            Require(Quaternion.Angle(arm.transform.localRotation, Quaternion.Euler(0, 0, 35)) < 0.05f,
+                "positive arm limit clamps only the local Z hinge", ref assertions);
+            Set("LockArm1Target", 999, 999);
+            targetObject.transform.position = new Vector3(-10, -10, -30);
+            Tick();
+            Require(Quaternion.Angle(arm.transform.localRotation, Quaternion.Euler(0, 0, 35)) < 0.05f,
+                "999 holds the previous aim despite target movement", ref assertions);
+            Set("LockArm1Target", 20, 35);
+            Tick();
+            Require(Quaternion.Angle(arm.transform.localRotation, Quaternion.Euler(0, 0, -20)) < 0.05f,
+                "negative arm direction uses its independent limit", ref assertions);
+            Set("LockArm1Target", -1, 35);
+            Tick();
+            Require(Quaternion.Angle(arm.transform.localRotation, Quaternion.Euler(0, 0, -18)) < 0.05f,
+                "either negative limit disables aim and blends back", ref assertions);
+            for (int i = 0; i < 10; i++) Tick();
+            Require(Quaternion.Angle(arm.transform.localRotation, Quaternion.identity) < 0.01f,
+                "released arm returns fully to ANI pose", ref assertions);
+            targetObject.transform.position = new Vector3(0, 10, 10);
+            Set("LockBodyDownTarget", 20, 20);
+            Set("LockBodyUpTarget", 80, 45);
+            for (int i = 0; i < 11; i++) Tick();
+            Require(Quaternion.Angle(lower.transform.rotation, Quaternion.Euler(-20, 0, 0)) < 0.05f &&
+                Quaternion.Angle(upper.transform.localRotation, Quaternion.Euler(-25, 0, 0)) < 0.05f,
+                "original Body bindings split elevation into lower 20 and upper residual 25 degrees", ref assertions);
+            var resetBlock = typeof(TestPlayController).GetMethod("ResetOriginalBlockState", InstancePrivate);
+            resetBlock.Invoke(controller, null);
+            Tick();
+            Require(Quaternion.Angle(upper.transform.rotation, Quaternion.Euler(-45, 0, 0)) < 0.05f,
+                "joint aim persists across script blocks as in FUN_004b8250", ref assertions);
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(host);
+            UnityEngine.Object.DestroyImmediate(targetObject);
+        }
+        return assertions;
+    }
+
     public static int VerifyProjectileLockGating()
     {
         int assertions = 0;
         GameObject host = new GameObject("ProjectileLockVerification");
         GameObject root = new GameObject("ProjectileLockRoot");
         GameObject muzzle = new GameObject("ProjectileLockMuzzle");
+        GameObject arm = new GameObject("ProjectileLockArm");
         GameObject dummy = new GameObject("ProjectileLockTarget");
         TestPlayController controller = host.AddComponent<TestPlayController>();
         try
@@ -65,8 +149,11 @@ public static class TestPlayRuntimeVerification
             target.logHits = false;
             controller.target = target;
             muzzle.transform.SetPositionAndRotation(new Vector3(3f, 2f, 1f), Quaternion.Euler(-12f, 35f, 7f));
+            arm.transform.SetParent(root.transform, false);
+            muzzle.transform.SetParent(arm.transform, true);
             SptRuntimeData data = new SptRuntimeData();
             data.WeaponPoints[0] = new WeaponPointInfo { BoneTr = muzzle.transform };
+            data.AttackArms[0] = new SptFrameBindingInfo { BoneTr = arm.transform };
             SetField(controller.sptSource, "<LastSptData>k__BackingField", data);
             dummy.transform.position = muzzle.transform.TransformPoint(new Vector3(2f, 0f, 20f));
             MethodInfo spawn = typeof(TestPlayController).GetMethod("SpawnRunProc", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -90,14 +177,44 @@ public static class TestPlayRuntimeVerification
                     Vector3.Angle(free.transform.forward, muzzle.transform.forward) < 0.01f,
                 "a projectile fired unlocked remains straight after the owner acquires a lock", ref assertions);
             TestPlayProjectile locked = FireType1();
-            Require(Vector3.Angle(locked.transform.forward, dummy.transform.position - muzzle.transform.position) < 0.01f &&
+            Require(Vector3.Angle(locked.transform.forward, muzzle.transform.forward) < 0.01f &&
                     locked.maximumHomingTurnDegrees > 0f,
-                "locked type 1 preserves initial aim and distance-dependent homing", ref assertions);
+                "locked type 1 preserves muzzle-forward emission and distance-dependent homing", ref assertions);
             dummy.transform.position += muzzle.transform.right * 4f;
             Quaternion beforeTurn = locked.transform.rotation;
             locked.SimulateOriginalTick(1f / 60f);
             Require(Quaternion.Angle(beforeTurn, locked.transform.rotation) > 0.01f,
                 "locked type 1 still turns toward a moving target", ref assertions);
+
+            foreach (Vector3 localDirection in new[] { Vector3.right, Vector3.left, Vector3.back, Vector3.up, Vector3.down })
+            {
+                dummy.transform.position = muzzle.transform.position + muzzle.transform.TransformDirection(localDirection) * 20f;
+                Quaternion localMuzzle = muzzle.transform.localRotation;
+                TestPlayProjectile aimed = FireType1();
+                Require(Vector3.Angle(aimed.transform.forward, muzzle.transform.forward) < 0.05f,
+                    "emission never overrides the visible pose for vertical or rear targets", ref assertions);
+                Require(Vector3.Distance(aimed.transform.position, muzzle.transform.position) < 0.00001f,
+                    "lock correction preserves WEAPONPOINT origin", ref assertions);
+                Require(Vector3.Angle(aimed.transform.forward, data.WeaponPoints[0].WorldForward) < 0.05f &&
+                        Quaternion.Angle(localMuzzle, muzzle.transform.localRotation) < 0.05f && root.transform.rotation == Quaternion.identity,
+                    "visible arm hierarchy aims without changing muzzle local pose or mech movement facing", ref assertions);
+            }
+            data.WeaponPoints[0].Direction = SptDirection.DOWN;
+            dummy.transform.position += new Vector3(20, 10, -10);
+            var downShot = FireType1();
+            Require(Vector3.Angle(downShot.transform.forward, -muzzle.transform.forward) < 0.05f,
+                "SPT DOWN emits along the visible muzzle negative Z axis", ref assertions);
+            data.WeaponPoints[0].Direction = SptDirection.UP;
+            data.AttackArms.Clear();
+            dummy.transform.position = muzzle.transform.position + muzzle.transform.right * 20f;
+            var unbound = FireType1();
+            Require(Vector3.Angle(unbound.transform.forward, muzzle.transform.forward) < 0.05f,
+                "missing arm binding never redirects a projectile away from the visible muzzle", ref assertions);
+            data.AttackArms[0] = new SptFrameBindingInfo { BoneTr = arm.transform };
+            dummy.transform.position = muzzle.transform.position;
+            TestPlayProjectile coincident = FireType1();
+            Require(Quaternion.Angle(coincident.transform.rotation, muzzle.transform.rotation) < 0.05f,
+                "coincident target preserves a finite muzzle rotation", ref assertions);
 
             controller.ClearTargetLock();
             TestPlayProjectile released = FireType1();
@@ -129,14 +246,20 @@ public static class TestPlayRuntimeVerification
             fallbackSpawn.Invoke(controller, new object[] { "LockProbe", 1f, 20f, true });
             Require(transients[transients.Count - 1].GetComponent<TestPlayProjectile>().homingTurnRate > 0f,
                 "fallback homing remains available with a valid lock", ref assertions);
+            dummy.transform.position = new Vector3(-20f, 4f, -10f);
+            fallbackSpawn.Invoke(controller, new object[] { "LockProbe", 1f, 20f, false });
+            var aimedFallback = transients[transients.Count - 1].GetComponent<TestPlayProjectile>();
+            Require(Vector3.Angle(aimedFallback.transform.forward, root.transform.forward) < 0.05f &&
+                    aimedFallback.homingTurnRate == 0f,
+                "fallback launch also keeps its actual emitter axis without enabling homing", ref assertions);
         }
         finally
         {
             foreach (GameObject transient in (List<GameObject>)GetField(controller, "spawnedTransientObjects"))
                 if (transient != null) UnityEngine.Object.DestroyImmediate(transient);
             UnityEngine.Object.DestroyImmediate(host);
-            UnityEngine.Object.DestroyImmediate(root);
             UnityEngine.Object.DestroyImmediate(muzzle);
+            UnityEngine.Object.DestroyImmediate(root);
             UnityEngine.Object.DestroyImmediate(dummy);
         }
         return assertions;
@@ -268,6 +391,36 @@ public static class TestPlayRuntimeVerification
                 TestPlayCombatCore.ResolveHitReactionState(0x40) == 0,
             "AttackFlag 1/8 reaction priority and bit 0x40 normal-reaction suppression",
             ref assertions);
+
+        TestPlaySessionReactionDecision belowThreshold = TestPlayCombatCore.ResolveSessionReaction(
+            new TestPlaySessionReactionInput { accumulatedDown = 198, incomingDown = 1,
+                reactionState = 1, hpAfter = 100, airborne = false });
+        TestPlaySessionReactionDecision groundHit = TestPlayCombatCore.ResolveSessionReaction(
+            new TestPlaySessionReactionInput { accumulatedDown = 199, incomingDown = 1,
+                reactionState = 1, hpAfter = 100, airborne = false });
+        TestPlaySessionReactionDecision airHit = TestPlayCombatCore.ResolveSessionReaction(
+            new TestPlaySessionReactionInput { accumulatedDown = 0, incomingDown = 1,
+                reactionState = 2, hpAfter = 100, airborne = true });
+        TestPlaySessionReactionDecision knockdown = TestPlayCombatCore.ResolveSessionReaction(
+            new TestPlaySessionReactionInput { accumulatedDown = 400, incomingDown = 1,
+                reactionState = 1, hpAfter = 100, airborne = false });
+        TestPlaySessionReactionDecision defeated = TestPlayCombatCore.ResolveSessionReaction(
+            new TestPlaySessionReactionInput { accumulatedDown = 0, incomingDown = 0,
+                reactionState = 0, hpAfter = 0, airborne = false });
+        Require(!belowThreshold.startsReaction && belowThreshold.accumulatedDown == 199 &&
+                groundHit.startsReaction && !groundHit.knockdown && groundHit.actionId == 13 &&
+                airHit.startsReaction && airHit.actionId == 14,
+            "session hit reactions use the confirmed 200 down threshold and ground/air actions",
+            ref assertions);
+        Require(knockdown.knockdown && knockdown.actionId == 15 &&
+                knockdown.phase == TestPlaySessionReactionPhase.Knockback &&
+                defeated.defeated && defeated.actionId == 15 &&
+                defeated.phase == TestPlaySessionReactionPhase.Defeated,
+            "session knockdown and defeat select action 15 at the confirmed 401/HP0 boundaries",
+            ref assertions);
+        Require(TestPlayCombatCore.TickAccumulatedDown(2) == 1 &&
+                TestPlayCombatCore.TickAccumulatedDown(0) == 0,
+            "session accumulated down decays without becoming negative", ref assertions);
 
         TestPlayDefenseHitInput input = new TestPlayDefenseHitInput
         {
@@ -1210,12 +1363,12 @@ public static class TestPlayRuntimeVerification
                 106, Vector3.forward, Vector3.back, action => true);
             Require(forwardShot.selectedActionId == 100 && !forwardShot.usesDirectionalVariant,
                 "target-relative shot keeps base action 100 inside the forward cone", ref assertions);
-            Require(leftShot.selectedActionId == 102 && leftShot.scriptActionId == 100 &&
+            Require(leftShot.selectedActionId == 101 && leftShot.scriptActionId == 100 &&
                     leftShot.usesDirectionalVariant && leftShot.usesDualChannels,
                 "left target selects pose 102 with base script 100 on dual channels", ref assertions);
-            Require(rightShot.selectedActionId == 101 && rightShot.scriptActionId == 100 &&
+            Require(rightShot.selectedActionId == 102 && rightShot.scriptActionId == 100 &&
                     rightShot.usesDirectionalVariant && rightShot.usesDualChannels,
-                "right target selects pose 101 with base script 100 on dual channels", ref assertions);
+                "right target selects pose 102 with base script 100 on dual channels", ref assertions);
             Require(rearShot.selectedActionId == 103 && rearShot.scriptActionId == 103 &&
                     rearShot.usesDirectionalVariant && rearShot.usesDualChannels,
                 "rear target selects self-scripted action 103 on dual channels", ref assertions);
@@ -1225,19 +1378,19 @@ public static class TestPlayRuntimeVerification
             Require(missingSideUsesRear.selectedActionId == 103 &&
                     missingSideUsesRear.scriptActionId == 103,
                 "missing side variant uses rear action 103 when available", ref assertions);
-            Require(boostLeftShot.selectedActionId == 108 && boostLeftShot.scriptActionId == 106 &&
-                    boostRightShot.selectedActionId == 107 && boostRightShot.scriptActionId == 106 &&
+            Require(boostLeftShot.selectedActionId == 107 && boostLeftShot.scriptActionId == 106 &&
+                    boostRightShot.selectedActionId == 108 && boostRightShot.scriptActionId == 106 &&
                     boostRearShot.selectedActionId == 103 && boostRearShot.scriptActionId == 103,
-                "boost shot 106 resolves left 108, right 107, and rear 103", ref assertions);
+                "boost shot 106 resolves left 107, right 108, and rear 103", ref assertions);
 
             controller.lockedTarget = target;
             controller.targetLockActive = true;
             targetObject.transform.position = Vector3.left * 2f;
-            Require((int)resolveShot.Invoke(controller, null) == 102,
-                "locked left target selects grounded shot action 102", ref assertions);
-            targetObject.transform.position = Vector3.right * 2f;
             Require((int)resolveShot.Invoke(controller, null) == 101,
-                "locked right target selects grounded shot action 101", ref assertions);
+                "locked left target selects grounded shot action 101", ref assertions);
+            targetObject.transform.position = Vector3.right * 2f;
+            Require((int)resolveShot.Invoke(controller, null) == 102,
+                "locked right target selects grounded shot action 102", ref assertions);
             targetObject.transform.position = Vector3.back * 2f;
             Require((int)resolveShot.Invoke(controller, null) == 103,
                 "locked rear target selects grounded shot action 103", ref assertions);
@@ -1359,10 +1512,24 @@ public static class TestPlayRuntimeVerification
             controller.state.SetInt(190, 4);
             SetField(controller, "attackSequenceActive", true);
             SetField(controller, "shotTurnAng", 20f);
+            Vector3 targetBeforeSteeringProbe = targetObject.transform.position;
+            targetObject.transform.position = Vector3.right * 20f;
             applyShotSteering.Invoke(controller, new object[] { rootObject.transform });
             Require(Mathf.Abs(Vector3.Angle(Vector3.forward, rootObject.transform.forward) - 20f) < 0.01f &&
-                    rootObject.transform.forward.x < 0f,
-                "ShotTurnAng steers target-relative action 103 left by the scripted angle", ref assertions);
+                    rootObject.transform.forward.x > 0f,
+                "ShotTurnAng turns toward the right target even when left input is held", ref assertions);
+            targetObject.transform.position = rootObject.transform.forward * 20f;
+            Quaternion alignedRotation = rootObject.transform.rotation;
+            applyShotSteering.Invoke(controller, new object[] { rootObject.transform });
+            Require(Quaternion.Angle(alignedRotation, rootObject.transform.rotation) < 0.05f,
+                "ShotTurnAng stops turning once target facing is reached", ref assertions);
+            SetField(controller, "shotTurnAng", 0f);
+            handleAssignment.Invoke(controller, new object[] { "Sub_LRKey", "=", Values(7f), "Sub_LRKey=7;" });
+            applyShotSteering.Invoke(controller, new object[] { rootObject.transform });
+            Require(Mathf.Abs(Vector3.SignedAngle(alignedRotation * Vector3.forward, rootObject.transform.forward, Vector3.up) + 7f) < 0.05f,
+                "Sub_LRKey independently applies left input yaw", ref assertions);
+            SetField(controller, "subLRKey", 0f);
+            targetObject.transform.position = targetBeforeSteeringProbe;
             rootObject.transform.rotation = Quaternion.identity;
 
             handle.Invoke(controller, new object[] { "AttackDelay", Values(0f, 3f), "AttackDelay(0,3);" });
@@ -2528,6 +2695,27 @@ public static class TestPlayRuntimeVerification
         Require(burnerTexture != null && effectShader != null,
             "decrypted original burner texture and additive shader are available", ref assertions);
 
+        Texture2D explosionTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(
+            "Assets/Generated/TestPlay/OriginalTextures/02_explode2.png");
+        GameObject explosionObject = GameObject.CreatePrimitive(PrimitiveType.Quad);
+        try
+        {
+            TestPlayOriginalEffect explosion = explosionObject.AddComponent<TestPlayOriginalEffect>();
+            explosion.Initialize(explosionTexture, effectShader, Vector2.one, 0f, Color.white, true);
+            explosion.SetSheetFrame(8, 8, 19);
+            Material material = explosionObject.GetComponent<MeshRenderer>().sharedMaterial;
+            Require(explosionTexture != null && material != null &&
+                Vector2.Distance(material.GetTextureScale("_MainTex"), new Vector2(0.125f, 0.125f)) < 0.0001f,
+                "combat explosion selects one cell from the 8x8 original texture sheet", ref assertions);
+            Require(
+                Vector2.Distance(material.GetTextureOffset("_MainTex"), new Vector2(0.375f, 0.625f)) < 0.0001f,
+                "combat explosion sheet advances in source top-to-bottom frame order", ref assertions);
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(explosionObject);
+        }
+
         GameObject burnerObject = new GameObject("TestPlayVerificationBurnerVisual");
         try
         {
@@ -2706,8 +2894,14 @@ public static class TestPlayRuntimeVerification
             controller.bodyUpAimRoot = aimObject.transform;
             handle.Invoke(controller, new object[] { "LockBodyUpTarget", Values(-1f, -1f), "LockBodyUpTarget(-1,-1);" });
             applyAim.Invoke(controller, null);
+            Require(aimObject.transform.rotation == Quaternion.identity,
+                "negative LockBodyUpTarget limits disable aiming", ref assertions);
+            targetObject.transform.position += Vector3.up;
+            handle.Invoke(controller, new object[] { "LockBodyUpTarget", Values(80f, 45f), "LockBodyUpTarget(80,45);" });
+            applyAim.Invoke(controller, null);
+            applyAim.Invoke(controller, null);
             Require(aimObject.transform.rotation != Quaternion.identity && rootObject.transform.rotation == rootRotationBeforeAim,
-                "mapped body aim rotates only its explicit visual transform", ref assertions);
+                "mapped body pitch blends only its explicit visual transform", ref assertions);
 
             controller.state.SetInt(195, 0);
             updateLock.Invoke(controller, null);

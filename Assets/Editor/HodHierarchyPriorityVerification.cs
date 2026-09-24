@@ -29,19 +29,13 @@ public static class HodHierarchyPriorityVerification
         string temporaryPath = Path.Combine(
             Path.GetTempPath(),
             "WindomXP-HierarchyPriority-" + Guid.NewGuid().ToString("N") + ".an2");
-        string legacyRoundTripPath = Path.Combine(
-            Path.GetTempPath(),
-            "WindomXP-ElsQtLegacy-" + Guid.NewGuid().ToString("N") + ".ani");
-        string legacyAn2ExportPath = Path.Combine(
-            Path.GetTempPath(),
-            "WindomXP-ElsQtExport-" + Guid.NewGuid().ToString("N") + ".an2");
-        string legacyIkEditPath = Path.Combine(
-            Path.GetTempPath(),
-            "WindomXP-LegacyIkEdit-" + Guid.NewGuid().ToString("N") + ".ani");
 
         try
         {
-            assertions += await LegacyAniRotationVerification.RunForJobAsync();
+            // 2026-09-13: this project's supported mech inputs are AN2 containers.
+            // Legacy fixture tests below are retained as historical verification code,
+            // but are deliberately outside this suite (not conditionally skipped).
+            assertions += LegacyAniRotationVerification.RunSyntheticForJob();
             TestOriginalHierarchyPolicy();
             TestConsistentHierarchy();
             TestTreeDepthWinsAmbiguousHierarchy();
@@ -52,17 +46,10 @@ public static class HodHierarchyPriorityVerification
             TestBothInvalidStopsLoading();
             TestFrameMismatchStopsWithoutFallback();
             TestNoTextDialogCancelChoice();
-            await TestOriginalElsQtHierarchy(temporaryPath);
             await TestAn2RoundTrip(temporaryPath);
-            await TestElsQtLegacyAniRoundTrip(legacyRoundTripPath, legacyAn2ExportPath);
-            await TestLegacyIkDataStructuralEdits(legacyIkEditPath);
-            await TestLegacyStructureEditPreparation(legacyIkEditPath);
-            await TestLegacyPreloadAn2Conversion(legacyIkEditPath);
-            await TestConversionFailureIsolation(legacyIkEditPath);
-            await TestScriptBytePreservation();
+            await TestRealAn2RoundTrip(temporaryPath);
+            TestInitialScriptBytes();
             await TestAn2OriginalGameLimit();
-            await TestConversionDialogChoices();
-            await TestUnknownLegacyIkDataProtection(legacyIkEditPath);
             lastResult = $"{assertions} assertions passed.";
             Debug.Log($"[HodHierarchyPriorityVerification] {lastResult}");
             return assertions;
@@ -76,14 +63,46 @@ public static class HodHierarchyPriorityVerification
         {
             if (File.Exists(temporaryPath))
                 File.Delete(temporaryPath);
-            if (File.Exists(legacyRoundTripPath))
-                File.Delete(legacyRoundTripPath);
-            if (File.Exists(legacyAn2ExportPath))
-                File.Delete(legacyAn2ExportPath);
-            if (File.Exists(legacyIkEditPath))
-                File.Delete(legacyIkEditPath);
             isRunning = false;
         }
+    }
+
+    static async System.Threading.Tasks.Task TestRealAn2RoundTrip(string output)
+    {
+        string path = Path.Combine(Application.dataPath, "..", "Windom_Data", "Robo",
+            "ガンダムTR-1ヘイズル改", "Script.ani");
+        Require(ReadSignature(path, 3) == "AN2", "current real mech fixture is an AN2 container");
+        string before = ComputeSha256(path);
+        var source = new ani2();
+        Require(await source.load(path), "real AN2 public load");
+        string hierarchy = ComputeHierarchySignature(source);
+        var scripts = ReadScriptPayloads(path);
+        source.save(output);
+        var reloaded = new ani2();
+        Require(await reloaded.load(output), "real AN2 public reload");
+        Require(reloaded.sourceFormat == AniContainerFormat.An2, "saved container stays AN2");
+        Require(hierarchy == ComputeHierarchySignature(reloaded), "real AN2 part names and hierarchy retained");
+        Require(source.animations.Count == reloaded.animations.Count && CountFrames(source) == CountFrames(reloaded),
+            "real AN2 animation and frame counts retained");
+        for (int a = 0; a < source.animations.Count; a++)
+        for (int f = 0; f < source.animations[a].frames.Count; f++)
+        for (int p = 0; p < source.animations[a].frames[f].parts.Count; p++)
+        {
+            var expectedPart = source.animations[a].frames[f].parts[p];
+            var actualPart = reloaded.animations[a].frames[f].parts[p];
+            Require(expectedPart.position.Equals(actualPart.position) && expectedPart.rotation.Equals(actualPart.rotation)
+                && expectedPart.scale.Equals(actualPart.scale) && expectedPart.unk1.Equals(actualPart.unk1)
+                && expectedPart.unk2.Equals(actualPart.unk2) && expectedPart.unk3.Equals(actualPart.unk3),
+                "real AN2 frame transforms and reserved values retained");
+        }
+        var actual = ReadScriptPayloads(output);
+        Require(scripts.Count == actual.Count, "real AN2 script count retained");
+        for (int i = 0; i < scripts.Count; i++)
+            Require(BytesEqual(scripts[i], actual[i]), "real AN2 raw script bytes retained " + i);
+        string savedHash = ComputeSha256(output);
+        reloaded.save(output);
+        Require(savedHash == ComputeSha256(output), "real AN2 reload and resave is byte exact");
+        Require(before == ComputeSha256(path), "real AN2 source unchanged");
     }
 
     static void TestOriginalHierarchyPolicy()

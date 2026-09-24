@@ -585,13 +585,13 @@ public static class TestPlayCombatCore
         int rightActionId;
         if (baseActionId == 100)
         {
-            leftActionId = 102;
-            rightActionId = 101;
+            leftActionId = 101;
+            rightActionId = 102;
         }
         else if (baseActionId == 106)
         {
-            leftActionId = 108;
-            rightActionId = 107;
+            leftActionId = 107;
+            rightActionId = 108;
         }
         else
         {
@@ -609,6 +609,8 @@ public static class TestPlayCombatCore
         if (dot >= OriginalShotForwardDotThreshold)
             return decision;
 
+        // FUN_004d2300 crosses target with facing: negative selects table +0x20
+        // (102/108 = right), positive +0x24 (101/107 = left).
         float side = Vector3.Cross(flatFacing, flatTarget).y;
         int sideActionId = side <= 0f ? leftActionId : rightActionId;
         int selectedActionId = sideActionId;
@@ -1178,6 +1180,34 @@ public static class TestPlayCombatCore
     {
         float radius = Mathf.Max(0f, sphereRadius);
         return PointSegmentDistanceSquared(sphereCenter, segmentStart, segmentEnd) <= radius * radius;
+    }
+
+    // Closest points on two finite segments; the capsule is its axis swept by
+    // a sphere. This also handles zero-length trails and sphere-only fixtures.
+    public static bool IntersectsTrailSegmentCapsule(Vector3 start, Vector3 end,
+        Vector3 axisStart, Vector3 axisEnd, float radius)
+    {
+        Vector3 d1 = end - start, d2 = axisEnd - axisStart, r = start - axisStart;
+        float a = Vector3.Dot(d1, d1), e = Vector3.Dot(d2, d2), f = Vector3.Dot(d2, r);
+        float s, t;
+        const float epsilon = 0.00000001f;
+        if (a <= epsilon && e <= epsilon) { s = t = 0f; }
+        else if (a <= epsilon) { s = 0f; t = Mathf.Clamp01(f / e); }
+        else
+        {
+            float c = Vector3.Dot(d1, r);
+            if (e <= epsilon) { t = 0f; s = Mathf.Clamp01(-c / a); }
+            else
+            {
+                float b = Vector3.Dot(d1, d2), denominator = a * e - b * b;
+                s = denominator > epsilon ? Mathf.Clamp01((b * f - c * e) / denominator) : 0f;
+                t = (b * s + f) / e;
+                if (t < 0f) { t = 0f; s = Mathf.Clamp01(-c / a); }
+                else if (t > 1f) { t = 1f; s = Mathf.Clamp01((b - c) / a); }
+            }
+        }
+        float safeRadius = Mathf.Max(0f, radius);
+        return (r + d1 * s - d2 * t).sqrMagnitude <= safeRadius * safeRadius;
     }
 
     public static TestPlayProjectileTickResult TickProjectile(TestPlayProjectileTickInput input)

@@ -193,8 +193,9 @@ public class TestPlayProjectile : MonoBehaviour
                 if (sessionHitTargets.Contains(candidate.Handle.MechId)) continue;
                 for (int i = 1; i < originalType1Trail.Count; i++)
                 {
-                    if (!TestPlayCombatCore.IntersectsType1TrailSegmentSphere(originalType1Trail[i - 1],
-                        originalType1Trail[i], candidate.Position, candidate.Radius)) continue;
+                    if (!TestPlayCombatCore.IntersectsTrailSegmentCapsule(originalType1Trail[i - 1],
+                        originalType1Trail[i], candidate.ShotCapsuleStart, candidate.ShotCapsuleEnd,
+                        candidate.ShotCapsuleRadius)) continue;
                     var hit = CreateHit();
                     if (session.ResolveHit(AttackId, OwnerHandle, candidate.Handle, hit,
                         originalType1Trail[i - 1], false, 0, out hit))
