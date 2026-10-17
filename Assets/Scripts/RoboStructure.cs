@@ -28,6 +28,10 @@ public class RoboStructure : MonoBehaviour
     
     // Start is called before the first frame update
     internal Action<UnityEngine.Object> RegisterOwnedAsset;
+    readonly HashSet<GameObject> meshlessModelParts = new HashSet<GameObject>();
+
+    // A successfully parsed, meshless X is a transform-only part, not an import failure.
+    internal bool IsMeshlessModelPart(GameObject part) => meshlessModelParts.Contains(part);
 
     public void InitializeRuntime()
     {
@@ -93,7 +97,11 @@ public class RoboStructure : MonoBehaviour
         for (int i = 0; i < Robo.parts.Count; i++)
         {
             if (i < source.parts.Count && source.parts[i] != null)
+            {
                 CopyRenderComponents(source.parts[i], parts[i]);
+                if (source.IsMeshlessModelPart(source.parts[i]))
+                    meshlessModelParts.Add(parts[i]);
+            }
         }
     }
 
@@ -150,8 +158,8 @@ public class RoboStructure : MonoBehaviour
                     return;
                 }
 
-                Mesh mesh = new Mesh();
-                RegisterOwnedAsset?.Invoke(mesh);
+                if (scen.Meshes == null || scen.Meshes.Length == 0)
+                    return;
                 List<int> combinedMeshIndices;
                 List<CombineInstance> combineInstances = BuildCombineInstances(scen, file, mirrorZ, out combinedMeshIndices, RegisterOwnedAsset);
                 if (combineInstances.Count == 0)
@@ -159,6 +167,8 @@ public class RoboStructure : MonoBehaviour
                     Debug.LogWarning($"[RoboStructure] 有効なメッシュがありません: {file}");
                     return;
                 }
+                Mesh mesh = new Mesh();
+                RegisterOwnedAsset?.Invoke(mesh);
                 mesh.CombineMeshes(combineInstances.ToArray(), false);
 
                 Material[] materials = new Material[combinedMeshIndices.Count];
@@ -212,8 +222,16 @@ public class RoboStructure : MonoBehaviour
         }
     }
 
+    // Attack adapters share decryption, coordinate conversion and lease ownership
+    // with HOD models. No binary data or source file is rewritten.
+    internal void ImportAttackModel(GameObject destination, string file)
+    {
+        ImportModelEncrypted(destination, file);
+    }
+
     void ImportModelEncrypted(GameObject GO, string file)
     {
+        meshlessModelParts.Remove(GO);
         // HOD part names are also used for bones and attachment points. Such
         // nodes intentionally have no standalone .x model, but must remain in
         // the hierarchy so ANI/SPT references can resolve their transforms.
@@ -239,7 +257,7 @@ public class RoboStructure : MonoBehaviour
                 string data1 = System.Text.Encoding.GetEncoding("utf-8").GetString(data);
                 data1 = XfileStringConverter(data1);
                 byte[] data3 = System.Text.Encoding.GetEncoding("utf-8").GetBytes(data1);
-                MemoryStream ms = new MemoryStream(data3);
+                using var ms = new MemoryStream(data3);
                 Assimp.Scene scen = null;
                 bool mirrorZ = IsTextFloat32Xfile(data1);
                 try
@@ -258,12 +276,14 @@ public class RoboStructure : MonoBehaviour
                     Debug.LogWarning($"[RoboStructure] 暗号化モデルを読み込めませんでした: {file}");
                     return;
                 }
-
-
-
-                Mesh mesh = new Mesh();
-                RegisterOwnedAsset?.Invoke(mesh);
-                mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+                // Assimp successfully parsed this X, but it contains only frames (or
+                // empty meshes). Keep the HOD part and its children without allocating
+                // a mesh/material. Parse errors above must still fail the build.
+                if (scen.Meshes == null || scen.Meshes.Length == 0)
+                {
+                    meshlessModelParts.Add(GO);
+                    return;
+                }
                 
                 try
                 {
@@ -274,6 +294,9 @@ public class RoboStructure : MonoBehaviour
                         Debug.LogWarning($"[RoboStructure] 有効なメッシュがありません: {file}");
                         return;
                     }
+                    Mesh mesh = new Mesh();
+                    RegisterOwnedAsset?.Invoke(mesh);
+                    mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
                     mesh.CombineMeshes(combineInstances.ToArray(), false);
 
                     Material[] materials = new Material[combinedMeshIndices.Count];
@@ -848,6 +871,7 @@ public class RoboStructure : MonoBehaviour
 
     void DestroyExistingStructureObjects()
     {
+        meshlessModelParts.Clear();
         if (parts == null || parts.Count == 0)
         {
             if (root != null)

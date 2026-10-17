@@ -105,7 +105,7 @@ public static class UnityMechBuilder
             {
                 var filter = robo.parts[i].GetComponent<MeshFilter>();
                 if (File.Exists(Path.Combine(robo.folder, data.structure.parts[i].name)) &&
-                    (filter == null || filter.sharedMesh == null))
+                    (filter == null || filter.sharedMesh == null) && !robo.IsMeshlessModelPart(robo.parts[i]))
                     throw new InvalidDataException("モデルを構築できませんでした: " + data.structure.parts[i].name);
             }
             cancellationToken.ThrowIfCancellationRequested();

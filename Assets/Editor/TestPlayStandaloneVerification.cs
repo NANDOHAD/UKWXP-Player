@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -26,6 +27,7 @@ public static class TestPlayStandaloneVerification
             if (!condition) throw new InvalidOperationException("[Standalone] " + message);
             assertions++;
         };
+        await VerifyMeshlessModelsAsync(outputFolder, token, check);
         if (UnityEngine.Localization.Settings.LocalizationSettings.SelectedLocale == null)
             check(UILocalization.Get("standalone.missing_locale_probe", "言語未選択 {0}", 7) == "言語未選択 7",
                 "missing locale uses formatted fallback");
@@ -144,5 +146,86 @@ public static class TestPlayStandaloneVerification
             UnityEngine.Object.DestroyImmediate(cameraObject);
         }
         return assertions;
+    }
+
+    static async Task VerifyMeshlessModelsAsync(string outputFolder, CancellationToken token, Action<bool, string> check)
+    {
+        // Isolated AN2/X/SPT fixtures: never change the real mech or its source models.
+        foreach (string precision in new[] { "0032", "0064" })
+        foreach (bool encrypted in new[] { false, true })
+        foreach (bool emptyMesh in new[] { false, true })
+        {
+            string label = precision + (encrypted ? "-encrypted" : "-plain") + (emptyMesh ? "-empty-mesh" : "-frame");
+            string folder = Path.Combine(outputFolder, "meshless-models", label);
+            Directory.CreateDirectory(folder);
+            var coder = new CypherTranscoder { cypher = encrypted ? 0x0B7E7759u : 0u };
+            string header = "xof 0303txt " + precision + "\n";
+            string pivot = header + (emptyMesh ? "Mesh Empty { 0; 0; }" : "Frame Pivot { Frame Nested { } }");
+            string visible = header + "Frame Container { Frame Child { Mesh Visible {\n" +
+                "3;\n0.0;0.0;0.0;,\n1.0;0.0;0.0;,\n0.0;1.0;0.0;;\n1;\n3;0,1,2;;\n} } }";
+            File.WriteAllBytes(Path.Combine(folder, "pivot.x"), coder.Transcode(System.Text.Encoding.UTF8.GetBytes(pivot)));
+            File.WriteAllBytes(Path.Combine(folder, "visible.x"), coder.Transcode(System.Text.Encoding.UTF8.GetBytes(visible)));
+            File.WriteAllBytes(Path.Combine(folder, "Script.spt"), coder.Transcode(USEncoder.ToEncoding.ToSJIS("WEAPONPOINT(0, pivot.x, UP)\r\n")));
+            var structure = new hod2v0("meshless") { parts = new List<hod2v0_Part> {
+                new hod2v0_Part { name = "root", childCount = 1, scale = Vector3.one, rotation = Quaternion.identity },
+                new hod2v0_Part { name = "pivot.x", treeDepth = 1, childCount = 1,
+                    position = new Vector3(2, 3, 4), rotation = Quaternion.Euler(0, 30, 0), scale = new Vector3(2, 1, 1) },
+                new hod2v0_Part { name = "visible.x", treeDepth = 2, position = Vector3.up,
+                    rotation = Quaternion.identity, scale = Vector3.one }
+            } };
+            var frame = new hod2v1("pose") { parts = structure.parts.Select(p => new hod2v1_Part {
+                name = p.name, treeDepth = p.treeDepth, childCount = p.childCount,
+                position = p.position, rotation = p.rotation, scale = p.scale
+            }).ToList() };
+            var source = new ani2 { structure = structure, animations = Enumerable.Range(0, 200).Select(i => new animation {
+                name = "pose" + i, frames = new List<hod2v1> { frame }, scripts = new List<script>()
+            }).ToList() };
+            string path = Path.Combine(folder, "Script.an2");
+            source.save(path);
+            var loaded = await MechLoader.LoadAsync(path, null, token);
+            check(loaded.sourceFormat == AniContainerFormat.An2 && loaded.structure.parts.Count == 3 &&
+                loaded.animations[0].frames[0].parts[1].position == structure.parts[1].position, label + " AN2 save/reload");
+            MechAssetLease lease = null;
+            int rootsBefore = UnityEngine.Object.FindObjectsByType<RoboStructure>(FindObjectsSortMode.None).Length;
+            var diagnostics = new List<string>();
+            Application.LogCallback capture = (message, stack, type) => {
+                if (message.StartsWith("[RoboStructure]") && type != LogType.Log) diagnostics.Add(message);
+            };
+            Application.logMessageReceived += capture;
+            try
+            {
+                lease = await UnityMechBuilder.BuildAsync(loaded, path, token);
+                var robo = lease.Robo;
+                check(diagnostics.Count == 0, label + " no import warnings");
+                check(robo.parts.Count == 3 && robo.parts[2].transform.parent == robo.parts[1].transform,
+                    label + " transform-only parent and child retained");
+                check(GetMesh(robo.parts[1]) == null && robo.parts[1].GetComponent<MeshRenderer>() == null,
+                    label + " empty part has no rendering assets");
+                check(GetMesh(robo.parts[2]) != null && GetMesh(robo.parts[2]).vertexCount == 3,
+                    label + " child mesh still imported from nested X frames");
+                check(robo.parts[1].transform.localPosition == structure.parts[1].position &&
+                    Quaternion.Angle(robo.parts[1].transform.localRotation, structure.parts[1].rotation) < 0.01f &&
+                    robo.parts[1].transform.localScale == structure.parts[1].scale, label + " HOD local TRS retained");
+                check(lease.Spt.WeaponPoints[0].BoneTr == robo.parts[1].transform, label + " SPT binds meshless part");
+                var mesh = GetMesh(robo.parts[2]);
+                var root = robo.root;
+                await lease.ReleaseAsync();
+                check(root == null && mesh == null && lease.RemainingOwnedAssetCount == 0, label + " release all assets");
+                lease = null;
+                // An unreadable model must not be mistaken for a successfully parsed empty model.
+                File.WriteAllBytes(Path.Combine(folder, "pivot.x"), new byte[0]);
+                bool rejected = false;
+                try { lease = await UnityMechBuilder.BuildAsync(loaded, path, token); }
+                catch (InvalidDataException e) { rejected = e.Message.Contains("pivot.x"); }
+                check(rejected, label + " invalid model still rejected");
+                check(UnityEngine.Object.FindObjectsByType<RoboStructure>(FindObjectsSortMode.None).Length == rootsBefore,
+                    label + " failed build rolls back");
+            }
+            finally
+            {
+                Application.logMessageReceived -= capture;
+                if (lease != null) await lease.ReleaseAsync();
+            }
+        }
     }
 }

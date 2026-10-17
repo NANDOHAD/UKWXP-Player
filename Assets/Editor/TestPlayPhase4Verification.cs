@@ -134,6 +134,18 @@ public static class TestPlayPhase4Verification
             "a zero type 55 lifetime uses the original 999999999 non-decrementing sentinel",
             ref assertions);
 
+        float primaryWidth = TestPlayPresentationCore.OriginalSwordBeamInitialFullWidth;
+        primaryWidth = TestPlayPresentationCore.AdvanceOriginalSwordBeamPrimaryWidth(primaryWidth, true);
+        bool growingWidth = Mathf.Approximately(primaryWidth, 0.1f);
+        primaryWidth = TestPlayPresentationCore.AdvanceOriginalSwordBeamPrimaryWidth(primaryWidth, false);
+        bool pulse12 = Mathf.Approximately(primaryWidth, 0.12f);
+        primaryWidth = TestPlayPresentationCore.AdvanceOriginalSwordBeamPrimaryWidth(primaryWidth, false);
+        bool pulse14 = Mathf.Approximately(primaryWidth, 0.14f);
+        primaryWidth = TestPlayPresentationCore.AdvanceOriginalSwordBeamPrimaryWidth(primaryWidth, false);
+        Require(growingWidth && pulse12 && pulse14 && Mathf.Approximately(primaryWidth, 0.1f),
+            "BB_SwordBeam primary quad uses the original 0.10 then 0.12/0.14 width pulse",
+            ref assertions);
+
         TestPlayPresentationEvent melee = TestPlayPresentationCore.CreateProc(
             true, Values(1f, 57f, 1f), TestPlayPresentationAdapterKind.CombatOnly);
         Require(melee.procType == 57 && melee.adapter == TestPlayPresentationAdapterKind.CombatOnly,

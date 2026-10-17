@@ -33,7 +33,9 @@ public enum TestPlayPresentationAdapterKind
     PrimitiveFallback,
     CameraShakeApproximation,
     CombatOnly,
-    OriginalTextureTrail
+    OriginalTextureTrail,
+    OriginalExternalModel,
+    OriginalCameraPlacement
 }
 
 public struct TestPlayPresentationEvent
@@ -54,6 +56,9 @@ public struct TestPlayPresentationEvent
     public int subtype;
     public int textureId;
     public float output;
+    // Optional presentation-only emitter position; no combat/tick contract change.
+    public bool hasWorldPosition;
+    public UnityEngine.Vector3 worldPosition;
     public TestPlayScriptValue[] arguments;
 }
 
@@ -211,6 +216,21 @@ public struct TestPlayOriginalBurnerBallUpdateResult
     public bool expiredAfterUpdate;
 }
 
+public struct TestPlayWindLineState
+{
+    public int elapsedTicks;
+    public int alpha;
+    public bool expired;
+}
+
+public struct TestPlayWindRing2State
+{
+    public int elapsedTicks;
+    public float size;
+    public int alphaByte;
+    public bool expired;
+}
+
 public static class TestPlayPresentationCore
 {
     public const int MinimumBurnerId = 0;
@@ -220,9 +240,30 @@ public static class TestPlayPresentationCore
     public const int OriginalWindLineCount = 7;
     public const float OriginalWindLineWidth = 0.07f;
     public const float OriginalWindLineLength = 3f;
-    public const float OriginalWindRingRadius = 1f;
+    public const string OriginalWindLineTextureFileName = "Wind.png";
+    public const int OriginalWindLineTextureId = 36;
+    public const float OriginalWindLineTravelPerTick = 0.3f;
+    public const int OriginalWindLineInitialAlpha = 255;
+    public const int OriginalWindLineAlphaDeltaPerTick = -12;
+    public const int OriginalWindLineLifetimeTicks = 22;
+    public const string OriginalWindRing2TextureFileName = "WindRing.png";
+    public const int OriginalWindRing2TextureId = 20;
+    public const float OriginalWindRing2InitialSize = 1f;
+    public const float OriginalWindRing2GrowthPerTick = 0.3f;
+    public const int OriginalWindRing2InitialAlphaByte = 255;
+    public const int OriginalWindRing2AlphaDeltaPerTick = -24;
+    public const int OriginalWindRing2LifetimeTicks = 11;
+    public const float OriginalWindRingRadius = OriginalWindRing2InitialSize;
     public const int SwordBeamProcType = 55;
+    // FUN_00502cb0/FUN_00573750 initializes the primary quad with a 0.075
+    // half-width. FUN_00497cd0 then rewrites its full width: a growing blade
+    // resolves to 0.10, while a stationary blade pulses 0.10 -> 0.12 -> 0.14.
     public const float OriginalSwordBeamWidth = 0.075f;
+    public const float OriginalSwordBeamInitialFullWidth = OriginalSwordBeamWidth * 2f;
+    public const float OriginalSwordBeamGrowingHalfWidth = 0.1f;
+    public const float OriginalSwordBeamWidthStepPerTick = 0.02f;
+    public const float OriginalSwordBeamWidthResetThreshold = 0.15f;
+    public const float OriginalSwordBeamWidthReset = 0.1f;
     public const float OriginalSwordBeamGrowthPerTick = 0.2f;
     public const int OriginalSwordBeamInfiniteLifetime = 999999999;
     public const int ThunderEffectProcType = 60;
@@ -234,12 +275,14 @@ public static class TestPlayPresentationCore
     public const int OriginalBurnerBurstVariant0SecondaryTextureId = 9;
     public const int OriginalBurnerBurstVariant1PrimaryTextureId = 43;
     public const int OriginalBurnerBurstVariant1SecondaryTextureId = 44;
-    public const string OriginalWindRingTextureFileName = "WindRing.png";
-    public const int OriginalWindRingTextureId = 20;
-    public const float OriginalWindRingInitialSize = 1f;
-    public const float OriginalWindRingGrowthPerTick = 0.3f;
-    public const int OriginalWindRingInitialAlphaByte = 255;
-    public const int OriginalWindRingAlphaDeltaPerTick = -24;
+    // Type 54 BB_WindRing2 and type 62:2 BB_WindRing use the same texture and
+    // FUN_00491af0 update arithmetic, but keep distinct spawn/draw paths.
+    public const string OriginalWindRingTextureFileName = OriginalWindRing2TextureFileName;
+    public const int OriginalWindRingTextureId = OriginalWindRing2TextureId;
+    public const float OriginalWindRingInitialSize = OriginalWindRing2InitialSize;
+    public const float OriginalWindRingGrowthPerTick = OriginalWindRing2GrowthPerTick;
+    public const int OriginalWindRingInitialAlphaByte = OriginalWindRing2InitialAlphaByte;
+    public const int OriginalWindRingAlphaDeltaPerTick = OriginalWindRing2AlphaDeltaPerTick;
     public const int HinokoSubtype = 6;
     public const int OriginalHinokoTextureId = 40;
     public const int OriginalHinokoInitialAlphaByte = 255;
@@ -452,6 +495,8 @@ public static class TestPlayPresentationCore
         value.output = effectId;
         if (adapter == TestPlayPresentationAdapterKind.CameraShakeApproximation)
             value.diagnostic = "OriginalPerValueCameraFormulaUnknown";
+        else if (adapter == TestPlayPresentationAdapterKind.OriginalCameraPlacement)
+            value.diagnostic = "OriginalCameraModeFormula;UnityTransformAdapter";
         return value;
     }
 
@@ -803,6 +848,62 @@ public static class TestPlayPresentationCore
         return procType == WindLineProcType ? OriginalWindLineCount : 1;
     }
 
+    public static TestPlayWindLineState CreateOriginalWindLineState()
+    {
+        return new TestPlayWindLineState
+        {
+            elapsedTicks = 0,
+            alpha = OriginalWindLineInitialAlpha,
+            expired = false
+        };
+    }
+
+    public static bool AdvanceOriginalWindLine(ref TestPlayWindLineState state)
+    {
+        if (state.expired)
+            return false;
+
+        state.elapsedTicks++;
+        state.alpha += OriginalWindLineAlphaDeltaPerTick;
+        if (state.alpha < 0)
+        {
+            state.expired = true;
+            return false;
+        }
+        return true;
+    }
+
+    public static TestPlayWindRing2State CreateOriginalWindRing2State()
+    {
+        return new TestPlayWindRing2State
+        {
+            elapsedTicks = 0,
+            size = OriginalWindRing2InitialSize,
+            alphaByte = OriginalWindRing2InitialAlphaByte,
+            expired = false
+        };
+    }
+
+    public static bool AdvanceOriginalWindRing2(ref TestPlayWindRing2State state)
+    {
+        if (state.expired)
+            return false;
+
+        // BB_WindRing2's primary vtable selects FUN_00491af0, the same update
+        // function used by BB_WindRing. The derived initializer/draw remain
+        // separate: grow first, then reject a negative candidate alpha.
+        state.elapsedTicks++;
+        state.size += OriginalWindRing2GrowthPerTick;
+        int nextAlpha = state.alphaByte + OriginalWindRing2AlphaDeltaPerTick;
+        if (nextAlpha < 0)
+        {
+            state.expired = true;
+            return false;
+        }
+        state.alphaByte = nextAlpha;
+        return true;
+    }
+
     public static bool IsOriginalSwordBeamProc(bool extended, int procType)
     {
         return extended && procType == SwordBeamProcType;
@@ -853,6 +954,21 @@ public static class TestPlayPresentationCore
                 currentLength = targetLength;
         }
         return true;
+    }
+
+    public static float AdvanceOriginalSwordBeamPrimaryWidth(
+        float currentFullWidth,
+        bool lengthGrew)
+    {
+        // FUN_00497cd0 first writes half-width 0.1 while length grows. It then
+        // derives the current full width from the two X edges, adds 0.02, and
+        // resets values above 0.15 to 0.10 before rewriting the quad again.
+        if (lengthGrew)
+            currentFullWidth = OriginalSwordBeamGrowingHalfWidth * 2f;
+        float nextWidth = currentFullWidth + OriginalSwordBeamWidthStepPerTick;
+        return nextWidth > OriginalSwordBeamWidthResetThreshold
+            ? OriginalSwordBeamWidthReset
+            : nextWidth;
     }
 
     public static bool IsOriginalThunderEffectProc(bool extended, int procType)

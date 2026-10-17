@@ -18,6 +18,9 @@ public static class TestPlayRuntimeVerification
     public static int RunAll()
     {
         int assertions = 0;
+        assertions += TestPlayCpuDataVerification.VerifyParser();
+        assertions += TestPlayCpuVerification.RunCore();
+        assertions += TestPlayCpuVerification.RunAdvanced();
         VerifyParserAndState(ref assertions);
         VerifyOriginalAnimationInitialScriptBoundary(ref assertions);
         VerifySptStatusInitialization(ref assertions);
@@ -25,10 +28,13 @@ public static class TestPlayRuntimeVerification
         VerifyFlowInterruption(ref assertions);
         VerifyRepeatInterval(ref assertions);
         VerifyOriginalAttackAndBurnerArguments(ref assertions);
+        assertions += VerifyProcDispatch();
+        assertions += VerifyTiri2Core();
         VerifyOriginalBurnerDrawPath(ref assertions);
         VerifyOriginalDefenseSemantics(ref assertions);
         VerifyOriginalNormalAttackFlow(ref assertions);
         VerifyOriginalBasicAniChannelsAndJump(ref assertions);
+        VerifyOriginalSubweaponChannels(ref assertions);
         VerifyOriginalSoundIds(ref assertions);
         VerifyOriginalTextureTables(ref assertions);
         VerifyBurnerDirectionAndVisual(ref assertions);
@@ -39,12 +45,273 @@ public static class TestPlayRuntimeVerification
         VerifyMovementReferenceModes(ref assertions);
         VerifyOriginalDirectionMovement(ref assertions);
         VerifyOriginalJumpAndBoost(ref assertions);
+        VerifyBoostShotContinuation(ref assertions);
         assertions += TestPlayPhase1Verification.RunAll();
         assertions += TestPlayPhase2Verification.RunAll();
         assertions += TestPlayPhase3Verification.RunAll();
         assertions += TestPlayPhase4Verification.RunAll();
         assertions += TestPlayPhase5Verification.RunAll();
         assertions += TestPlayPhase6Verification.RunAll();
+        return assertions;
+    }
+
+    internal static async System.Threading.Tasks.Task<int> RunForJobAsync(string outputFolder,
+        System.Threading.CancellationToken token)
+    {
+        int assertions = RunAll();
+        return assertions + await TestPlayCpuDataVerification.VerifyRealMechsAsync(outputFolder, token);
+    }
+
+    public static int VerifyProcDispatch()
+    {
+        int assertions = 0;
+        var host = new GameObject("ProcDispatchVerification");
+        var root = new GameObject("ProcDispatchRoot");
+        var muzzle = new GameObject("ProcDispatchMuzzle");
+        muzzle.transform.SetParent(root.transform, false);
+        muzzle.transform.localPosition = new Vector3(3, 2, 1);
+        var gun = new GameObject("ProcDispatchGun");
+        var sword = new GameObject("ProcDispatchSword");
+        gun.transform.SetParent(root.transform, false);
+        sword.transform.SetParent(root.transform, false);
+        var gunRenderer = gun.AddComponent<MeshRenderer>();
+        var swordRenderer = sword.AddComponent<MeshRenderer>();
+        var controller = host.AddComponent<TestPlayController>();
+        try
+        {
+            controller.logUnhandledCommands = false;
+            controller.robo = host.AddComponent<RoboStructure>();
+            controller.robo.root = root;
+            controller.sptSource = host.AddComponent<UI_SPT>();
+            var data = new SptRuntimeData();
+            data.WeaponPoints[0] = new WeaponPointInfo { BoneTr = muzzle.transform };
+            data.GunModels[0] = new SptFrameBindingInfo { BoneTr = gun.transform };
+            data.SwordModels[0] = new SptFrameBindingInfo { BoneTr = sword.transform };
+            SetField(controller.sptSource, "<LastSptData>k__BackingField", data);
+            controller.maximumEnergy = controller.currentEnergy = 500;
+            controller.maximumAuxiliaryEnergy = controller.currentAuxiliaryEnergy = 1000;
+            var events = new List<TestPlayRuntimeEvent>();
+            var presentation = new List<TestPlayPresentationEvent>();
+            controller.RuntimeEventRaised += events.Add;
+            controller.PresentationEventRaised += presentation.Add;
+            var handle = typeof(TestPlayController).GetMethod("HandleCommand", InstancePrivate);
+            var cleanup = typeof(TestPlayController).GetMethod("DestroyTransientObjects", InstancePrivate);
+            var transients = (List<GameObject>)GetField(controller, "spawnedTransientObjects");
+            var meleeStates = (List<TestPlayMeleeAttackState>)GetField(controller, "activeMeleeAttacks");
+            var vm = new TestPlayScriptVM(controller.state);
+            vm.commandHandler = (name, args, raw) => handle.Invoke(controller, new object[] { name, args, raw });
+            void Clear() { cleanup.Invoke(controller, null); meleeStates.Clear(); events.Clear(); presentation.Clear(); }
+
+            var shortArgs = Values(7, 6, 0, 30);
+            Require(TestPlayProcDispatch.TryNormalize(shortArgs, out var padded) &&
+                    padded.Count == 12 && padded[0].AsInt() == 7 && padded[2].AsInt() == 0 &&
+                    padded[3].AsInt() == 30 && padded[4].AsInt() == 0 && padded[11].AsInt() == 0,
+                "Scr_RunProc padding preserves command ID, WEAPONPOINT and cost", ref assertions);
+            padded[3] = TestPlayScriptValue.Number(99);
+            Require(shortArgs.Count == 4 && shortArgs[3].AsInt() == 30,
+                "normalization never rewrites caller/VM operands", ref assertions);
+            Require(!TestPlayProcDispatch.TryNormalize(Values(20, 6), out _) &&
+                    !TestPlayProcDispatch.TryNormalize(Values(0), out _),
+                "invalid local command ID and missing type are diagnosed", ref assertions);
+
+            int[] unsupported = { 15,17 };
+            foreach (string command in new[] { "RunProc", "RunProc2", "WeaponAttack", "WeaponAttack2" })
+            {
+                Clear();
+                // Same zero-tail payload through all aliases, including native short forms.
+                vm.Execute(command + "(7,6,0);");
+                var bullet = transients.Count == 1 ? transients[0].GetComponent<TestPlayProjectile>() : null;
+                Require(bullet != null && bullet.useOriginalType1Core &&
+                        bullet.collisionKind == TestPlayAttackCollisionKind.OriginalType6 &&
+                        bullet.sourceCommand == command + ":6" &&
+                        Vector3.Distance(bullet.transform.position, muzzle.transform.position) < .00001f &&
+                        Mathf.Abs(bullet.speed - .9f * controller.originalTickRate) < .0001f &&
+                        controller.currentEnergy == 500 && controller.currentAuxiliaryEnergy == 1000,
+                    command + " routes zero-filled type6 to WEAPONPOINT/Bullet without treating ID7 as cost", ref assertions);
+                Clear();
+                vm.Execute(command + "(7,1,0);");
+                var beam = transients.Count == 1 ? transients[0].GetComponent<TestPlayProjectile>() : null;
+                Require(beam != null && beam.useOriginalType1Core &&
+                        beam.collisionKind == TestPlayAttackCollisionKind.OriginalType1 &&
+                        beam.sourceCommand == command + ":1" &&
+                        Vector3.Distance(beam.transform.position, muzzle.transform.position) < .00001f,
+                    command + " uses the dedicated type1 handler even with a short payload", ref assertions);
+                Clear();
+                vm.Execute(command + "(7,11,0,30,999,999,999,999,999,999,999,999);");
+                var bullet11 = transients.Count == 1 ? transients[0].GetComponent<TestPlayProjectile>() : null;
+                Require(bullet11 != null && bullet11.collisionKind == TestPlayAttackCollisionKind.OriginalType11 &&
+                        bullet11.sourceCommand == command + ":11" && bullet11.distancePerTick == 1.1f &&
+                        bullet11.visualWidth == .05f && bullet11.trailPointCount == 3 &&
+                        bullet11.textureId == 16 && bullet11.remainingActiveTicks == 300 &&
+                        controller.currentAuxiliaryEnergy == 970,
+                    command + " type11 ignores tail operands and charges each single shot once", ref assertions);
+                controller.currentAuxiliaryEnergy = 1000;
+                Clear();
+                vm.Execute(command + "(7,9,0,200,999,999,999,999,999,999,999,999);");
+                var cannon = transients.Count == 1 ? transients[0].GetComponent<TestPlayProjectile>() : null;
+                Require(cannon != null && cannon.collisionKind == TestPlayAttackCollisionKind.OriginalType9 &&
+                    cannon.sourceCommand == command+":9" && cannon.remainingActiveTicks==180 &&
+                    cannon.distancePerTick==3 && cannon.trailPointCount==5 && cannon.textureId==7 &&
+                    cannon.visualWidth==.3f && cannon.maximumHomingTurnDegrees==0 && controller.currentAuxiliaryEnergy==800,
+                    command+" normal Canon fixed parameters and single auxiliary charge; tails ignored",ref assertions);
+                controller.currentAuxiliaryEnergy=1000;
+                Clear();
+                vm.Execute(command + "(7,26,0,200,175,999,999,999,999,999,999,999);");
+                var cannon2 = transients.Count == 1 ? transients[0].GetComponent<TestPlayProjectile>() : null;
+                Require(cannon2 != null && cannon2.collisionKind == TestPlayAttackCollisionKind.OriginalType26 &&
+                    cannon2.sourceCommand == command+":26" && cannon2.remainingActiveTicks==180 &&
+                    cannon2.distancePerTick==1.75f && cannon2.trailPointCount==5 && cannon2.textureId==7 &&
+                    cannon2.visualWidth==.3f && cannon2.maximumHomingTurnDegrees==0 && controller.currentAuxiliaryEnergy==800,
+                    command+" Canon2 p4/100 speed, fixed trail/lifetime, cost once; later tails ignored",ref assertions);
+                controller.currentAuxiliaryEnergy=1000;
+                Clear();
+                vm.Execute(command + "(7,52,0);");
+                Require(!gunRenderer.enabled && swordRenderer.enabled && transients.Count == 0 &&
+                        controller.state.GetInt(152) == 1 && controller.heldWeapon == "SWORD",
+                    command + " selects sword state and non-projectile model control", ref assertions);
+                vm.Execute(command + "(7,55,0,100,-1,-1,100,0,0,0,0,100);" +
+                           command + "(7,55,0,100,-1,-1,100,0,0,0,1,100);");
+                vm.Execute(command + "(7,52,0);");
+                Require(((System.Collections.ICollection)GetField(controller, "activeSwordBeams")).Count == 2,
+                    command + " repeated sword selection retains both sword beams", ref assertions);
+                vm.Execute(command + "(7,51,0);");
+                Require(gunRenderer.enabled && !swordRenderer.enabled && controller.state.GetInt(152) == 0 &&
+                        controller.heldWeapon == "GUN" &&
+                        ((System.Collections.ICollection)GetField(controller, "activeSwordBeams")).Count == 0 &&
+                        GetField(controller, "managedSwordBeam") == null,
+                    command + " gun selection ends every sword beam and clears managed ownership", ref assertions);
+                data.GunModels[1] = null;
+                data.SwordModels[1] = new SptFrameBindingInfo();
+                data.GunModels.Remove(0); data.SwordModels.Remove(0);
+                vm.Execute(command + "(7,52,0);" + command + "(7,51,0);");
+                Require(controller.state.GetInt(152) == 0 && controller.heldWeapon == "GUN" &&
+                        transients.Count == 0 && controller.currentEnergy == 500 && controller.currentAuxiliaryEnergy == 1000,
+                    command + " empty/null/unbound model slots still switch state without resource cost", ref assertions);
+                data.GunModels[0] = new SptFrameBindingInfo { BoneTr = gun.transform };
+                data.SwordModels[0] = new SptFrameBindingInfo { BoneTr = sword.transform };
+                Clear();
+                vm.Execute(command + "(7,53,0);");
+                Require(transients.Count == 7 && transients.TrueForAll(go => go.GetComponent<TestPlayProjectile>() == null),
+                    command + " emits seven wind visuals, never a combat projectile", ref assertions);
+                Clear();
+                vm.Execute(command + "(7,55,0);");
+                Require(((System.Collections.ICollection)GetField(controller, "activeSwordBeams")).Count == 1 &&
+                        presentation.Exists(e => e.type == TestPlayPresentationEventType.Proc &&
+                            e.procType == 55 && e.command == command) &&
+                        presentation.Exists(e => e.type == TestPlayPresentationEventType.Visual &&
+                            e.source == command + ":55:Primary") &&
+                        presentation.Exists(e => e.type == TestPlayPresentationEventType.Visual &&
+                            e.source == command + ":55:Line"),
+                    command + " zero-pads type 55 and preserves its literal alias on both visual layers",
+                    ref assertions);
+                Clear();
+
+                vm.Execute(command + "(7,57,0,100,0,1,0,0,0,0,0,2);");
+                Require(meleeStates.Count == 1 && meleeStates[0].source == command + ":57",
+                    command + " preserves its literal alias on the dedicated type57 attack state",
+                    ref assertions);
+                Clear();
+
+                vm.Execute(command + "(7,60,0,3,20,25,-1,100,1,0,0,0);");
+                Require(((System.Collections.ICollection)GetField(controller, "activeThunderEffects")).Count == 1 &&
+                        presentation.Exists(e => e.type == TestPlayPresentationEventType.Visual &&
+                            e.source == command + ":60"),
+                    command + " preserves its literal alias on the dedicated type60 state and trace",
+                    ref assertions);
+                Clear();
+
+                vm.Execute(command + "(7,62,0,2,200,0,0,0,0,0,0,0);");
+                Require(((System.Collections.ICollection)GetField(controller, "activeWindRingSpecialEffects")).Count == 1 &&
+                        presentation.Exists(e => e.type == TestPlayPresentationEventType.Visual &&
+                            e.source == command + ":62:2"),
+                    command + " preserves its literal alias on subtype2 core and trace", ref assertions);
+                Clear();
+                vm.Execute(command + "(7,62,0,3,350,350,0,0,0,0,0,0);");
+                Require(((System.Collections.ICollection)GetField(controller, "activeBurnerBurstEffects")).Count == 1 &&
+                        presentation.Exists(e => e.type == TestPlayPresentationEventType.Visual &&
+                            e.source.StartsWith(command + ":62:3:")),
+                    command + " preserves its literal alias on subtype3 core and both-layer trace", ref assertions);
+                Clear();
+                vm.Execute(command + "(7,62,0,6,5,300,15,15,15,0,0,0);");
+                Require(((System.Collections.ICollection)GetField(controller, "activeHinokoEffects")).Count == 1 &&
+                        presentation.Exists(e => e.type == TestPlayPresentationEventType.Visual &&
+                            e.source == command + ":62:6"),
+                    command + " preserves its literal alias on subtype6 core and trace", ref assertions);
+                Clear();
+                vm.Execute(command + "(7,62,0,8,0,0,10,5,2,0,2,0);");
+                Require(((System.Collections.ICollection)GetField(controller, "activeMagicShieldEffects")).Count == 1 &&
+                        presentation.Exists(e => e.type == TestPlayPresentationEventType.Visual &&
+                            e.source == command + ":62:8"),
+                    command + " preserves its literal alias on subtype8 core and trace", ref assertions);
+                Clear();
+
+                for (int type = 37; type <= 50; type++)
+                {
+                    vm.Execute(command + "(7," + type + ",0,200);");
+                    Require(transients.Count == 0 && controller.currentEnergy == 500 &&
+                            controller.currentAuxiliaryEnergy == 1000 && presentation.Count == 0,
+                        command + " original no-op " + type + " has no resource/presentation side effect", ref assertions);
+                }
+                foreach (int type in unsupported)
+                {
+                    Clear();
+                    vm.Execute(command + "(7," + type + ",0,200);");
+                    Require(transients.Count == 0 && controller.currentEnergy == 500 &&
+                            controller.currentAuxiliaryEnergy == 1000 && presentation.Count == 1 &&
+                            presentation[0].type == TestPlayPresentationEventType.Diagnostic &&
+                            presentation[0].procType == type && presentation[0].diagnostic.StartsWith("UnsupportedProc"),
+                        command + " unsupported type " + type + " is diagnostic-only, including partial defense/size code", ref assertions);
+                }
+                foreach (int subtype in new[] { 12, -1 })
+                {
+                    Clear();
+                    vm.Execute(command + "(7,62,0," + subtype + ");");
+                    Require(transients.Count == 0 && presentation.Count == 1 && presentation[0].subtype == subtype &&
+                            presentation[0].diagnostic.StartsWith("UnsupportedProc"),
+                        command + " missing special subtype " + subtype + " is explicit", ref assertions);
+                }
+                Clear();
+                vm.Execute(command + "(7,62,0,7,30,30,20,0,0,0,0,0);");
+                Require(transients.Count == 0,
+                    command + " rejects subtype7 zero atlas dimensions", ref assertions);
+                Clear();
+                float beforeAux = controller.currentAuxiliaryEnergy;
+                vm.Execute(command + "(7,62,0,11,3,999,-999,0,0,0,0,0);");
+                Require(transients.Count == 3 && controller.currentAuxiliaryEnergy == beforeAux &&
+                        controller.currentEnergy == 500 && transients.TrueForAll(go => go.GetComponent<TestPlayProjectile>() == null) &&
+                        presentation.Exists(e => e.type == TestPlayPresentationEventType.Visual &&
+                            e.source == command + ":62:11"),
+                    command + " Tiri2 creates p4 non-combat particles without resource consumption", ref assertions);
+                Require(transients.TrueForAll(go => {
+                    var e = go.GetComponent<TestPlayTiri2Effect>();
+                    return e != null && e.ElapsedTicks == 0 && e.Alpha == 255 &&
+                        Vector3.Distance(e.Position, muzzle.transform.position) < .00001f &&
+                        Mathf.Abs(e.Velocity.x) <= .3f && Mathf.Abs(e.Velocity.y) <= .3f && Mathf.Abs(e.Velocity.z) <= .3f;
+                }), command + " Tiri2 snapshots WEAPONPOINT with fixed world-axis scatter; p5/p6 are ignored", ref assertions);
+                Require(!presentation.Exists(e => e.type == TestPlayPresentationEventType.Diagnostic),
+                    command + " Tiri2 uses its dedicated handler", ref assertions);
+                Clear();
+                vm.Execute(command + "(7,62,0,11,0);" + command + "(7,62,0,11,-1);" + command + "(7,62,49,11,3);");
+                Require(transients.Count == 0,
+                    command + " zero/negative counts and an unbound WEAPONPOINT create no Tiri2", ref assertions);
+            }
+            Clear();
+            vm.Execute("@int[3]=6; WeaponAttack(19,@int[3],0,30);");
+            Require(transients.Count == 1 && controller.currentAuxiliaryEnergy == 970 && controller.currentEnergy == 500,
+                "VM-resolved type and ID19 consume cost once from auxiliary energy", ref assertions);
+            Clear();
+            foreach (int type in new[] { -1, 0, 63, 99 }) vm.Execute("RunProc(0," + type + ",0);");
+            Require(transients.Count == 0 && presentation.Count == 0,
+                "original skip and remaining unregistered table slots are no-op", ref assertions);
+            vm.Execute("RunProc(0,100,0); RunProc(0,-2,0); RunProc(20,6,0);");
+            Require(transients.Count == 0 && presentation.Count == 3,
+                "out-of-table types and invalid command ID never enter a handler", ref assertions);
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(host);
+            if (root != null) UnityEngine.Object.DestroyImmediate(root);
+        }
         return assertions;
     }
 
@@ -177,9 +444,10 @@ public static class TestPlayRuntimeVerification
                     Vector3.Angle(free.transform.forward, muzzle.transform.forward) < 0.01f,
                 "a projectile fired unlocked remains straight after the owner acquires a lock", ref assertions);
             TestPlayProjectile locked = FireType1();
-            Require(Vector3.Angle(locked.transform.forward, muzzle.transform.forward) < 0.01f &&
+            Require(Vector3.Angle(locked.transform.forward,
+                        dummy.transform.position - muzzle.transform.position) < 0.01f &&
                     locked.maximumHomingTurnDegrees > 0f,
-                "locked type 1 preserves muzzle-forward emission and distance-dependent homing", ref assertions);
+                "locked type 1 applies in-cone initial aim and distance-dependent homing", ref assertions);
             dummy.transform.position += muzzle.transform.right * 4f;
             Quaternion beforeTurn = locked.transform.rotation;
             locked.SimulateOriginalTick(1f / 60f);
@@ -855,6 +1123,66 @@ public static class TestPlayRuntimeVerification
             Require(Mathf.Approximately(controller.currentAuxiliaryEnergy, 1600f),
                 "original @int[103] changes update the auxiliary gauge", ref assertions);
 
+            MethodInfo auxiliaryTick = typeof(TestPlayController).GetMethod("UpdateOriginalAuxiliaryEnergy", InstancePrivate);
+            MethodInfo resetBlock = typeof(TestPlayController).GetMethod("ResetOriginalBlockState", InstancePrivate);
+            var energyVm = new TestPlayScriptVM(controller.state);
+            energyVm.commandHandler = (name, values, source) =>
+                handleCommand.Invoke(controller, new object[] { name, values, source });
+            energyVm.Execute("AddEnergy(3);");
+            Require(controller.currentAuxiliaryEnergy == 1600 && controller.currentEnergy == 3500,
+                "AddEnergy sets a rate without immediately changing either gauge", ref assertions);
+            for (int i = 0; i < 10; i++) auxiliaryTick.Invoke(controller, null);
+            Require(controller.currentAuxiliaryEnergy == 1630 && controller.currentEnergy == 3500,
+                "attack energy recovers every tick even airborne, independently of movement energy", ref assertions);
+            controller.state.SetInt(151, 1);
+            controller.currentAnimationIndex = 100;
+            resetBlock.Invoke(controller, null);
+            auxiliaryTick.Invoke(controller, null);
+            Require(controller.currentAuxiliaryEnergy == 1633,
+                "secondary-channel block entry preserves the recovery rate", ref assertions);
+            controller.state.SetInt(151, 0);
+            controller.currentAnimationIndex = 130;
+            resetBlock.Invoke(controller, null);
+            auxiliaryTick.Invoke(controller, null);
+            Require(controller.currentAuxiliaryEnergy == 1633,
+                "main-channel block entry clears AddEnergy until specified again", ref assertions);
+            energyVm.Execute("AddEnergy(100);");
+            auxiliaryTick.Invoke(controller, null);
+            Require(controller.currentAuxiliaryEnergy == 1700 && controller.state.GetInt(103) == 1700,
+                "recovery clamps to SPT Energy and synchronizes the existing resource alias", ref assertions);
+            energyVm.Execute("AddEnergy(0);");
+            controller.state.SetInt(103, 100);
+            auxiliaryTick.Invoke(controller, null);
+            Require(controller.currentAuxiliaryEnergy == 100,
+                "AddEnergy zero explicitly stops recovery", ref assertions);
+            energyVm.Execute("AddEnergy(-3);");
+            auxiliaryTick.Invoke(controller, null);
+            Require(controller.currentAuxiliaryEnergy == 97,
+                "AddEnergy also supports signed per-tick depletion", ref assertions);
+            energyVm.Execute("AddEnergy(-200);");
+            auxiliaryTick.Invoke(controller, null);
+            Require(controller.currentAuxiliaryEnergy == 0,
+                "Unity resource safety keeps negative depletion at zero", ref assertions);
+            MethodInfo recoverAction = typeof(TestPlayController).GetMethod("RecoverOriginalActionEnergy", InstancePrivate);
+            int[] recoveryActions = { 0, 50, 1, 51, 3, 7, 4, 8, 5, 6, 9, 22, 100, 131, 13, 16, 17 };
+            int[] recoveryAmounts = { 4, 4, 2, 2, 1, 1, 1, 1, 3, 3, 1, 1, 1, 0, 2, 3, 2 };
+            for (int i = 0; i < recoveryActions.Length; i++)
+            {
+                controller.currentAnimationIndex = recoveryActions[i];
+                controller.state.SetInt(103, 100);
+                energyTick.Invoke(controller, null);
+                float movementBeforeRecovery = controller.currentEnergy;
+                recoverAction.Invoke(controller, null);
+                Require(controller.currentAuxiliaryEnergy == 100 + recoveryAmounts[i] &&
+                        controller.currentEnergy == movementBeforeRecovery,
+                    "original action recovery rate for " + recoveryActions[i], ref assertions);
+            }
+            controller.currentAnimationIndex = 0;
+            controller.state.SetInt(103, 1699);
+            recoverAction.Invoke(controller, null);
+            Require(controller.currentAuxiliaryEnergy == 1700,
+                "native action recovery clamps at capacity", ref assertions);
+
             controller.ApplySelfDamage(200f);
             Require(Mathf.Approximately(controller.currentHP, 5000f), "self damage uses SPT HP capacity", ref assertions);
             controller.RestoreSelfHP(500f);
@@ -868,6 +1196,32 @@ public static class TestPlayRuntimeVerification
             UnityEngine.Object.DestroyImmediate(controllerObject);
             UnityEngine.Object.DestroyImmediate(sptObject);
         }
+    }
+
+    public static int VerifyTiri2Core()
+    {
+        int assertions = 0;
+        var go = new GameObject("Tiri2CoreVerification");
+        try
+        {
+            var effect = go.AddComponent<TestPlayTiri2Effect>();
+            effect.Initialize(new Vector3(1, 2, 3), new Vector3(.3f, .2f, -.1f), 10);
+            Require(effect.Advance() && Vector3.Distance(effect.Position, new Vector3(1.3f, 2.2f, 2.9f)) < .00001f,
+                "Tiri2 moves with its initial world velocity before gravity", ref assertions);
+            Require(Vector3.Distance(effect.Velocity, new Vector3(.285f, .18525f, -.095f)) < .00001f &&
+                    Vector3.Distance(effect.DrawVelocity, new Vector3(.3f, .2f, -.1f)) < .00001f && effect.Alpha == 247,
+                "Tiri2 applies gravity then 0.95 damping and retains pre-update draw direction", ref assertions);
+            for (int i = 1; i < 31; i++) effect.Advance();
+            Require(effect.Alpha == 7 && effect.ElapsedTicks == 31,
+                "Tiri2 remains alive through update31", ref assertions);
+            Require(!effect.Advance() && effect.Alpha == 0 && effect.ElapsedTicks == 32,
+                "Tiri2 expires on update32", ref assertions);
+            Vector3 finalPosition = effect.Position;
+            Require(!effect.Advance() && effect.Position == finalPosition,
+                "expired Tiri2 never moves again", ref assertions);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(go); }
+        return assertions;
     }
 
     static void VerifyNestedIf(ref int assertions)
@@ -987,6 +1341,39 @@ public static class TestPlayRuntimeVerification
                     TestPlayPresentationCore.GetOriginalWindVisualCount(false, 53) == 7 &&
                     TestPlayPresentationCore.GetOriginalWindVisualCount(false, 54) == 1,
                 "RunProc type 53/54 are the confirmed seven-line and one-ring presentation-only handlers",
+                ref assertions);
+            TestPlayWindLineState windLineState = TestPlayPresentationCore.CreateOriginalWindLineState();
+            bool windLineActiveThroughTick21 = true;
+            for (int i = 0; i < 21; i++)
+                windLineActiveThroughTick21 &= TestPlayPresentationCore.AdvanceOriginalWindLine(ref windLineState);
+            Require(windLineActiveThroughTick21 &&
+                    windLineState.elapsedTicks == 21 &&
+                    windLineState.alpha == 3 &&
+                    !windLineState.expired &&
+                    Mathf.Approximately(TestPlayPresentationCore.OriginalWindLineTravelPerTick, 0.3f),
+                "BB_WindLine remains active through update 21 after moving 0.3 and subtracting 12 alpha per tick",
+                ref assertions);
+            Require(!TestPlayPresentationCore.AdvanceOriginalWindLine(ref windLineState) &&
+                    windLineState.elapsedTicks == TestPlayPresentationCore.OriginalWindLineLifetimeTicks &&
+                    windLineState.alpha == -9 && windLineState.expired,
+                "BB_WindLine expires on update 22 when the next alpha becomes negative",
+                ref assertions);
+            TestPlayWindRing2State windRing2State = TestPlayPresentationCore.CreateOriginalWindRing2State();
+            bool windRing2ActiveThroughTick10 = true;
+            for (int i = 0; i < 10; i++)
+                windRing2ActiveThroughTick10 &=
+                    TestPlayPresentationCore.AdvanceOriginalWindRing2(ref windRing2State);
+            Require(windRing2ActiveThroughTick10 &&
+                    windRing2State.elapsedTicks == 10 &&
+                    Mathf.Approximately(windRing2State.size, 4f) &&
+                    windRing2State.alphaByte == 15 && !windRing2State.expired,
+                "BB_WindRing2 remains active through update 10 after growing 0.3 and subtracting 24 alpha per tick",
+                ref assertions);
+            Require(!TestPlayPresentationCore.AdvanceOriginalWindRing2(ref windRing2State) &&
+                    windRing2State.elapsedTicks == TestPlayPresentationCore.OriginalWindRing2LifetimeTicks &&
+                    Mathf.Approximately(windRing2State.size, 4.3f) &&
+                    windRing2State.alphaByte == 15 && windRing2State.expired,
+                "BB_WindRing2 expires on update 11 without committing the negative candidate alpha",
                 ref assertions);
             TestPlayPresentationEvent windProc = TestPlayPresentationCore.CreateProc(
                 false,
@@ -1195,6 +1582,8 @@ public static class TestPlayRuntimeVerification
                 "Assets/Generated/TestPlay/OriginalTextures/06_laser2.bmp");
             Texture2D windRingTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(
                 "Assets/Generated/TestPlay/OriginalTextures/19_WindRing.png");
+            Texture2D windLineTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(
+                "Assets/Generated/TestPlay/OriginalTextures/35_Wind.png");
             Texture2D hinokoTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(
                 "Assets/Generated/TestPlay/OriginalTextures/39_hinoko.png");
             Texture2D burnerTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(
@@ -1228,6 +1617,13 @@ public static class TestPlayRuntimeVerification
                 scriptTextureId = TestPlayPresentationCore.OriginalWindRingTextureId,
                 originalFileName = TestPlayPresentationCore.OriginalWindRingTextureFileName,
                 texture = windRingTexture
+            });
+            presentation.originalTextures.Add(new TestPlayTextureBinding
+            {
+                loadSequence = 35,
+                scriptTextureId = TestPlayPresentationCore.OriginalWindLineTextureId,
+                originalFileName = TestPlayPresentationCore.OriginalWindLineTextureFileName,
+                texture = windLineTexture
             });
             presentation.originalTextures.Add(new TestPlayTextureBinding
             {
@@ -1281,6 +1677,8 @@ public static class TestPlayRuntimeVerification
             MethodInfo handleAssignment = typeof(TestPlayController).GetMethod("HandleAssignment", InstancePrivate);
             MethodInfo resetBlock = typeof(TestPlayController).GetMethod("ResetOriginalBlockState", InstancePrivate);
             MethodInfo spawnRunProc = typeof(TestPlayController).GetMethod("SpawnRunProc", InstancePrivate);
+            MethodInfo tickWindLineEffects = typeof(TestPlayController).GetMethod("TickActiveWindLineEffects", InstancePrivate);
+            MethodInfo tickWindRing2Effects = typeof(TestPlayController).GetMethod("TickActiveWindRing2Effects", InstancePrivate);
             MethodInfo tickMeleeAttacks = typeof(TestPlayController).GetMethod("TickActiveMeleeAttacks", InstancePrivate);
             MethodInfo tickSwordBeams = typeof(TestPlayController).GetMethod("TickActiveSwordBeams", InstancePrivate);
             MethodInfo tickThunderEffects = typeof(TestPlayController).GetMethod("TickActiveThunderEffects", InstancePrivate);
@@ -1311,7 +1709,8 @@ public static class TestPlayRuntimeVerification
                 null);
             Require(setWeapon != null && resolveShot != null && resolveShotSelection != null &&
                     resolveMelee != null && resolveWeaponAction != null &&
-                    handle != null && handleAssignment != null && spawnRunProc != null && tickMeleeAttacks != null &&
+                    handle != null && handleAssignment != null && spawnRunProc != null &&
+                    tickWindLineEffects != null && tickWindRing2Effects != null && tickMeleeAttacks != null &&
                     tickSwordBeams != null && tickThunderEffects != null && tickHinokoEffects != null &&
                     tickWindRingSpecialEffects != null &&
                     tickBurnerBurstEffects != null &&
@@ -1537,6 +1936,50 @@ public static class TestPlayRuntimeVerification
             updateCooldowns.Invoke(controller, null);
             Require(controller.GetAttackCooldownTicks(0) == 2, "attack cooldowns decrement once per original tick", ref assertions);
 
+            // A/D/F must consume press edges even when reloading. Held ANI variables
+            // remain untouched; an unavailable A must not swallow a ready D/F press.
+            typeof(TestPlayController).GetMethod("ResetInputSamplingState", InstancePrivate).Invoke(controller, null);
+            string[] specialFields = { "sampledSpecial1KeyHeld", "sampledSpecial2KeyHeld", "sampledSpecial3KeyHeld" };
+            int[] specialActions = { controller.special1Action, controller.special2Action, controller.special3Action };
+            for (int special = 0; special < 3; special++)
+            {
+                int slot = special + 2;
+                SetField(controller, specialFields[special], true);
+                updateInput.Invoke(controller, null);
+                Require((int)getOneShot.Invoke(controller, null) == specialActions[special],
+                    "special " + special + " starts on a fresh edge", ref assertions);
+                handle.Invoke(controller, new object[] { "AttackDelay", Values(slot, 3), "AttackDelay" });
+                Require(controller.GetSpecialAttackRecovery(special) == 0f,
+                    "special gauge empties on its ANI command", ref assertions);
+                updateInput.Invoke(controller, null);
+                Require((int)getOneShot.Invoke(controller, null) == -1 && controller.state.GetInt(196 + special) == 1,
+                    "held special is not repeated and ANI held input survives", ref assertions);
+                SetField(controller, specialFields[special], false); updateInput.Invoke(controller, null);
+                SetField(controller, specialFields[special], true); updateInput.Invoke(controller, null);
+                Require((int)getOneShot.Invoke(controller, null) == -1,
+                    "fresh special press cannot bypass cooldown", ref assertions);
+                updateCooldowns.Invoke(controller, null);
+                Require(Mathf.Abs(controller.GetSpecialAttackRecovery(special) - 1f / 3f) < 0.0001f,
+                    "special gauge uses the executed duration", ref assertions);
+                updateCooldowns.Invoke(controller, null); updateCooldowns.Invoke(controller, null);
+                updateInput.Invoke(controller, null);
+                Require((int)getOneShot.Invoke(controller, null) == -1 && controller.GetSpecialAttackRecovery(special) == 1f,
+                    "full recovery does not auto-fire a held key", ref assertions);
+                SetField(controller, specialFields[special], false); updateInput.Invoke(controller, null);
+                SetField(controller, specialFields[special], true); updateInput.Invoke(controller, null);
+                Require((int)getOneShot.Invoke(controller, null) == specialActions[special],
+                    "released and repressed special fires after recovery", ref assertions);
+                SetField(controller, specialFields[special], false); updateInput.Invoke(controller, null);
+            }
+            handle.Invoke(controller, new object[] { "AttackDelay", Values(2, 60), "AttackDelay" });
+            SetField(controller, specialFields[0], true); SetField(controller, specialFields[1], true);
+            updateInput.Invoke(controller, null);
+            Require((int)getOneShot.Invoke(controller, null) == controller.special2Action && controller.GetAttackCooldownTicks(3) == 0,
+                "A cooldown does not block D or consume its gauge", ref assertions);
+            handle.Invoke(controller, new object[] { "AttackDelay", Values(2, 0), "AttackDelay" });
+            typeof(TestPlayController).GetMethod("ResetInputSamplingState", InstancePrivate).Invoke(controller, null);
+            updateInput.Invoke(controller, null);
+
             target.hp = 1000f;
             handle.Invoke(controller, new object[] { "ATTACK", Values(37f, 44f, 2f, 3f), "ATTACK(37,44,2,3);" });
             handleAssignment.Invoke(controller, new object[] { "AttackFlag", "=", Values(9f), "AttackFlag=9;" });
@@ -1551,6 +1994,8 @@ public static class TestPlayRuntimeVerification
             spawnRunProc.Invoke(controller, new object[] { Values(0f, 53f, 2f), false });
             int windLineEnd = windTransients.Count;
             bool windLinesValid = windLineEnd - windStart == TestPlayPresentationCore.OriginalWindLineCount;
+            var windLineObjects = new List<GameObject>();
+            var windLineStartPositions = new List<Vector3>();
             for (int i = windStart; i < windLineEnd; i++)
             {
                 GameObject windObject = windTransients[i];
@@ -1558,51 +2003,118 @@ public static class TestPlayRuntimeVerification
                 windLinesValid &= effect != null && effect.Kind == TestPlayWindEffectKind.WindLine &&
                     Mathf.Approximately(effect.DisplayWidth, TestPlayPresentationCore.OriginalWindLineWidth) &&
                     Mathf.Approximately(effect.DisplayLength, TestPlayPresentationCore.OriginalWindLineLength) &&
+                    effect.SourceTexture == windLineTexture &&
                     windObject.GetComponent<TestPlayProjectile>() == null;
+                windLineObjects.Add(windObject);
+                windLineStartPositions.Add(windObject != null ? windObject.transform.position : Vector3.zero);
             }
             Require(windLinesValid,
-                "RunProc type 53 creates seven non-combat BB_WindLine adapters with confirmed 0.07 x 3.0 dimensions and ignores p3",
+                "RunProc type 53 creates seven non-combat Wind.png BB_WindLine adapters with confirmed 0.07 x 3.0 dimensions and ignores p3",
+                ref assertions);
+
+            for (int tickIndex = 0; tickIndex < 21; tickIndex++)
+                tickWindLineEffects.Invoke(controller, null);
+            bool windLineTick21Valid = true;
+            Vector3 expectedWindLineOffset = Vector3.back *
+                (TestPlayPresentationCore.OriginalWindLineTravelPerTick * 21f);
+            for (int i = 0; i < windLineObjects.Count; i++)
+            {
+                GameObject windObject = windLineObjects[i];
+                TestPlayWindEffect effect = windObject != null ? windObject.GetComponent<TestPlayWindEffect>() : null;
+                windLineTick21Valid &= windObject != null && effect != null &&
+                    Vector3.Distance(
+                        windObject.transform.position,
+                        windLineStartPositions[i] + expectedWindLineOffset) < 0.0001f &&
+                    Mathf.Abs(effect.CurrentOpacity - (3f / 255f)) < 0.0001f;
+            }
+            Require(windLineTick21Valid,
+                "BB_WindLine uses the spawn-time direction snapshot and remains visible at alpha 3 after update 21",
+                ref assertions);
+            tickWindLineEffects.Invoke(controller, null);
+            Require(windTransients.Count == windStart && windLineObjects.TrueForAll(item => item == null),
+                "BB_WindLine releases all seven effects on update 22",
                 ref assertions);
 
             spawnRunProc.Invoke(controller, new object[] { Values(1f, 54f, 0f), false });
             int windRingEnd = windTransients.Count;
-            GameObject ringObject = windRingEnd == windLineEnd + 1 ? windTransients[windLineEnd] : null;
-            TestPlayWindEffect ringEffect = ringObject != null ? ringObject.GetComponent<TestPlayWindEffect>() : null;
-            Require(ringEffect != null && ringEffect.Kind == TestPlayWindEffectKind.WindRing &&
-                    Mathf.Approximately(ringEffect.DisplayRadius, TestPlayPresentationCore.OriginalWindRingRadius) &&
+            GameObject ringObject = windRingEnd == windStart + 1 ? windTransients[windStart] : null;
+            TestPlayOriginalEffect ringEffect = ringObject != null
+                ? ringObject.GetComponent<TestPlayOriginalEffect>()
+                : null;
+            Require(ringEffect != null && ringEffect.sourceTexture == windRingTexture &&
+                    ringEffect.billboard &&
+                    Vector3.Dot(ringEffect.billboardAxis, rootObject.transform.forward) > 0.999f &&
+                    ringEffect.displaySize == Vector2.one &&
+                    ringObject.transform.position == rootObject.transform.position &&
                     ringObject.GetComponent<TestPlayProjectile>() == null,
-                "RunProc type 54 creates one non-combat BB_WindRing2 adapter",
+                "RunProc type 54 creates one non-combat WindRing.png BB_WindRing2 billboard adapter",
+                ref assertions);
+
+            for (int tickIndex = 0; tickIndex < 10; tickIndex++)
+                tickWindRing2Effects.Invoke(controller, null);
+            Require(ringObject != null && ringEffect != null &&
+                    Mathf.Approximately(ringEffect.displaySize.x, 4f) &&
+                    Mathf.Approximately(ringEffect.displaySize.y, 4f) &&
+                    Mathf.Approximately(ringEffect.CurrentTint.a, 15f / 255f) &&
+                    ((System.Collections.ICollection)GetField(controller, "activeWindRing2Effects")).Count == 1,
+                "BB_WindRing2 grows to 4.0 and remains visible at alpha 15 after update 10",
+                ref assertions);
+            tickWindRing2Effects.Invoke(controller, null);
+            Require(ringObject == null && windTransients.Count == windStart &&
+                    ((System.Collections.ICollection)GetField(controller, "activeWindRing2Effects")).Count == 0,
+                "BB_WindRing2 releases its distinct type-54 visual on update 11",
                 ref assertions);
 
             int proc53Events = 0;
             int proc54Events = 0;
             int visual53Events = 0;
             int visual54Events = 0;
+            bool proc53UsesOriginalTexture = false;
+            bool proc54UsesOriginalTexture = false;
+            bool visual53UsesOriginalTexture = true;
+            bool visual54UsesOriginalTexture = true;
             for (int i = 0; i < windPresentationEvents.Count; i++)
             {
                 TestPlayPresentationEvent presentationEvent = windPresentationEvents[i];
                 if (presentationEvent.type == TestPlayPresentationEventType.Proc &&
                     presentationEvent.evidence == TestPlayPresentationEvidence.OriginalExecutableConfirmed)
                 {
-                    if (presentationEvent.procType == 53) proc53Events++;
-                    if (presentationEvent.procType == 54) proc54Events++;
+                    if (presentationEvent.procType == 53)
+                    {
+                        proc53Events++;
+                        proc53UsesOriginalTexture |=
+                            presentationEvent.adapter == TestPlayPresentationAdapterKind.OriginalTextureQuad;
+                    }
+                    if (presentationEvent.procType == 54)
+                    {
+                        proc54Events++;
+                        proc54UsesOriginalTexture |=
+                            presentationEvent.adapter == TestPlayPresentationAdapterKind.OriginalTextureQuad;
+                    }
                 }
                 if (presentationEvent.type == TestPlayPresentationEventType.Visual &&
                     presentationEvent.source == "RunProc:53")
+                {
                     visual53Events++;
+                    visual53UsesOriginalTexture &=
+                        presentationEvent.adapter == TestPlayPresentationAdapterKind.OriginalTextureQuad &&
+                        presentationEvent.textureId == TestPlayPresentationCore.OriginalWindLineTextureId;
+                }
                 if (presentationEvent.type == TestPlayPresentationEventType.Visual &&
                     presentationEvent.source == "RunProc:54")
+                {
                     visual54Events++;
+                    visual54UsesOriginalTexture &=
+                        presentationEvent.adapter == TestPlayPresentationAdapterKind.OriginalTextureQuad &&
+                        presentationEvent.textureId == TestPlayPresentationCore.OriginalWindRing2TextureId;
+                }
             }
             Require(proc53Events == 1 && proc54Events == 1 &&
-                    visual53Events == TestPlayPresentationCore.OriginalWindLineCount && visual54Events == 1,
-                "RunProc type 53/54 trace records confirmed Proc semantics and every Unity visual adapter",
+                    proc53UsesOriginalTexture && proc54UsesOriginalTexture &&
+                    visual53Events == TestPlayPresentationCore.OriginalWindLineCount &&
+                    visual53UsesOriginalTexture && visual54Events == 1 && visual54UsesOriginalTexture,
+                "RunProc type 53/54 trace records confirmed Proc semantics and the Wind/WindRing original texture adapters",
                 ref assertions);
-            for (int i = windStart; i < windRingEnd; i++)
-            {
-                if (windTransients[i] != null)
-                    UnityEngine.Object.DestroyImmediate(windTransients[i]);
-            }
 
             int swordBeamStart = windTransients.Count;
             spawnRunProc.Invoke(controller, new object[]
@@ -1622,6 +2134,8 @@ public static class TestPlayRuntimeVerification
                     swordBeam.PrimaryTextureId == 12 && swordBeam.LineTextureId == 13 &&
                     swordBeam.HasPrimaryLayer && swordBeam.HasLineLayer &&
                     Mathf.Approximately(swordBeam.CurrentLength, 0f) &&
+                    Mathf.Approximately(swordBeam.CurrentPrimaryWidth,
+                        TestPlayPresentationCore.OriginalSwordBeamInitialFullWidth) &&
                     Mathf.Approximately(swordBeam.TargetLength, 2f) &&
                     swordBeamObject.GetComponent<TestPlayProjectile>() == null &&
                     Mathf.Approximately(target.hp, 1000f),
@@ -1629,37 +2143,50 @@ public static class TestPlayRuntimeVerification
                 ref assertions);
             Transform primaryPlane0 = swordBeam != null ? swordBeam.GetPrimaryPlane(0) : null;
             Transform primaryPlane1 = swordBeam != null ? swordBeam.GetPrimaryPlane(1) : null;
+            Mesh primaryMesh = primaryPlane0 != null && primaryPlane0.GetComponent<MeshFilter>() != null
+                ? primaryPlane0.GetComponent<MeshFilter>().sharedMesh
+                : null;
+            Vector3[] primaryVertices = primaryMesh != null ? primaryMesh.vertices : null;
+            Vector2[] primaryUv = primaryMesh != null ? primaryMesh.uv : null;
             Require(updateSwordMotionBlur != null && primaryPlane0 != null && primaryPlane1 != null &&
-                    swordBeam.PrimaryPlaneCount == 2 && swordBeam.LinePlaneCount == 2 &&
+                    swordBeam.PrimaryPlaneCount == 2 && swordBeam.LinePlaneCount == 1 &&
+                    primaryVertices != null && primaryVertices.Length == 4 &&
+                    primaryUv != null && primaryUv.Length == 4 &&
+                    primaryVertices[0] == new Vector3(-0.5f, 0f, 0f) &&
+                    primaryVertices[3] == new Vector3(0.5f, 1f, 0f) &&
+                    primaryUv[0] == new Vector2(0f, 1f) && primaryUv[3] == new Vector2(1f, 0f) &&
+                    primaryPlane0.localPosition == Vector3.zero && primaryPlane1.localPosition == Vector3.zero &&
                     Vector3.Dot(primaryPlane0.TransformDirection(Vector3.up).normalized,
                         swordBeam.transform.forward) > 0.999f &&
                     Vector3.Dot(primaryPlane1.TransformDirection(Vector3.up).normalized,
                         swordBeam.transform.forward) > 0.999f &&
                     Mathf.Abs(Vector3.Dot(primaryPlane0.forward, primaryPlane1.forward)) < 0.001f &&
                     !swordBeam.IsLineBlurVisible,
-                "both vertical saber textures follow local Z+ while crossed, and Beam_Line starts hidden",
+                "primary adapters use the original forward-anchored UV quad, follow local Z+ while crossed, and Beam_Line starts hidden",
                 ref assertions);
             weaponPointObject.transform.SetPositionAndRotation(
                 new Vector3(1f, 2f, 3f),
                 Quaternion.Euler(0f, 30f, 0f));
             tickSwordBeams.Invoke(controller, null);
             Require(swordBeam != null && Mathf.Approximately(swordBeam.CurrentLength, 0.2f) &&
+                    Mathf.Approximately(swordBeam.CurrentPrimaryWidth, 0.1f) &&
+                    Mathf.Approximately(primaryPlane0.localScale.x, 0.1f) &&
                     swordBeam.transform.parent == weaponPointObject.transform &&
                     swordBeam.transform.localPosition == Vector3.zero &&
                     swordBeam.transform.localRotation == Quaternion.identity,
-                "RunProc2 type 55 grows by 0.2 per tick while following its WEAPONPOINT anchor",
+                "RunProc2 type 55 grows by 0.2, applies the original growing-width result, and follows WEAPONPOINT",
                 ref assertions);
             updateSwordMotionBlur.Invoke(swordBeam, null);
             Transform linePlane0 = swordBeam.GetLinePlane(0);
             Transform linePlane1 = swordBeam.GetLinePlane(1);
-            Require(swordBeam.IsLineBlurVisible && linePlane0 != null && linePlane1 != null &&
-                    linePlane0.GetComponent<Renderer>().enabled && linePlane1.GetComponent<Renderer>().enabled,
+            Require(swordBeam.IsLineBlurVisible && linePlane0 != null && linePlane1 == null &&
+                    linePlane0.GetComponent<Renderer>().enabled,
                 "Beam_Line appears as a motion blur only after the saber root or tip moves",
                 ref assertions);
-            updateSwordMotionBlur.Invoke(swordBeam, null);
+            for (int sample=0;sample<5;sample++) updateSwordMotionBlur.Invoke(swordBeam, null);
             Require(!swordBeam.IsLineBlurVisible &&
-                    !linePlane0.GetComponent<Renderer>().enabled && !linePlane1.GetComponent<Renderer>().enabled,
-                "Beam_Line hides again on the next stationary presentation frame",
+                    !linePlane0.GetComponent<Renderer>().enabled,
+                "Beam_Line clears after five stationary simulation samples",
                 ref assertions);
 
             int proc55Events = 0;
@@ -2289,6 +2816,33 @@ public static class TestPlayRuntimeVerification
                 "type 1 Core remains active for exactly 300 movement ticks",
                 ref assertions);
 
+            bool type1EndedEarly = false;
+            for (int i = 0; i < 297; i++)
+                type1EndedEarly |= type1Projectile.SimulateOriginalTick(1f / 60f);
+            Require(!type1EndedEarly && type1Projectile.remainingActiveTicks == 1,
+                "type 1 presentation stays active through movement tick 299", ref assertions);
+            Require(!type1Projectile.SimulateOriginalTick(1f / 60f) &&
+                    type1Projectile.OriginalType1Fading &&
+                    type1Projectile.remainingActiveTicks == 0 &&
+                    Mathf.Approximately(type1Projectile.OriginalType1FadeWidth, 0.09f) &&
+                    Mathf.Approximately(type1TrailEffect.TrailRenderer.widthMultiplier, 0.09f),
+                "type 1 movement tick 300 disables collision and starts the original 0.01 width fade",
+                ref assertions);
+            Vector3 type1FadePosition = type1Projectile.transform.position;
+            int type1FadeTicks = 0;
+            bool type1FadeExpired = false;
+            bool type1FadeMoved = false;
+            while (!type1FadeExpired && type1FadeTicks < 20)
+            {
+                type1FadeExpired = type1Projectile.SimulateOriginalTick(1f / 60f);
+                type1FadeTicks++;
+                if (!type1FadeExpired)
+                    type1FadeMoved |= type1Projectile.transform.position != type1FadePosition;
+            }
+            Require(type1FadeExpired && !type1FadeMoved && type1FadeTicks <= 10,
+                "type 1 fade no longer moves or collides and removes the ribbon below width 0.01",
+                ref assertions);
+
             handle.Invoke(controller, new object[] { "ATTACK", Values(37f, 44f, 2f, 3f), "ATTACK(37,44,2,3);" });
             handleAssignment.Invoke(controller, new object[] { "AttackFlag", "=", Values(2f), "AttackFlag=2;" });
             spawnProjectile.Invoke(controller, new object[] { "VerificationShot", 37f, 20f, false });
@@ -2440,6 +2994,52 @@ public static class TestPlayRuntimeVerification
             UnityEngine.Object.DestroyImmediate(rootObject);
             UnityEngine.Object.DestroyImmediate(controllerObject);
         }
+    }
+
+    static void VerifyOriginalSubweaponChannels(ref int assertions)
+    {
+        var host = new GameObject("SubweaponChannelVerification");
+        try
+        {
+            var controller = host.AddComponent<TestPlayController>();
+            var robo = host.AddComponent<RoboStructure>();
+            robo.root = host;
+            robo.ani = new ani2 { animations = new List<animation>() };
+            for (int i = 0; i < 156; i++)
+                robo.ani.animations.Add(new animation { frames = new List<hod2v1>(), scripts = new List<script>() });
+            controller.robo = robo;
+            controller.logUnhandledCommands = false;
+            typeof(TestPlayController).GetMethod("Awake", InstancePrivate).Invoke(controller, null);
+            var tick = typeof(TestPlayController).GetMethod("TickAnimation", InstancePrivate);
+            foreach (int action in new[] { 104, 105, 109 })
+            {
+                robo.ani.animations[action].scripts.Add(new script { unk = 5, time = 0,
+                    squirrel = "IF(@int[151],==,0); @int[178]+=1; AddEnergy(7); ENDIF;" +
+                        "IF(@int[151],==,1); @int[179]=@int[178]; ENDIF;" });
+                controller.state.SetInt(178, 0);
+                controller.state.SetInt(179, 0);
+                controller.ChangeAnimation(action);
+                tick.Invoke(controller, null);
+                Require(controller.state.GetInt(178) == 1 && controller.state.GetInt(179) == 1,
+                    "subweapon " + action + " executes main once before secondary", ref assertions);
+                tick.Invoke(controller, null);
+                Require(controller.state.GetInt(178) == 1,
+                    "subweapon " + action + " does not repeat a timed block each tick", ref assertions);
+                var selection = TestPlayActionCore.Resolve(action, TestPlayWeaponMode.Gun, _ => true, _ => true);
+                Require(selection.primaryChannel == 0 && selection.secondaryChannel == 1,
+                    "subweapon " + action + " exposes the original dual-channel selection", ref assertions);
+            }
+            foreach (int action in new[] { 100, 106, 110, 130 })
+                Require(!TestPlayActionCore.UsesOriginalDualAniChannels(action),
+                    "unrelated attack " + action + " does not acquire duplicate execution", ref assertions);
+            robo.ani.animations[105].scripts = new List<script> { new script { unk = 5,
+                squirrel = "IF(@int[151],==,0); ChangeAnime(104); ENDIF; IF(@int[151],==,1); @int[180]=99; ENDIF;" } };
+            controller.ChangeAnimation(105);
+            tick.Invoke(controller, null);
+            Require(controller.currentAnimationIndex == 104 && controller.state.GetInt(180) == 0,
+                "main-channel transition prevents stale secondary-channel execution", ref assertions);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(host); }
     }
 
     static void VerifyOriginalBasicAniChannelsAndJump(ref int assertions)
@@ -3362,6 +3962,73 @@ public static class TestPlayRuntimeVerification
             UnityEngine.Object.DestroyImmediate(rootObject);
             UnityEngine.Object.DestroyImmediate(controllerObject);
         }
+    }
+
+    static void VerifyBoostShotContinuation(ref int assertions)
+    {
+        var go = new GameObject("BoostShotVerification");
+        var root = new GameObject("BoostShotRoot");
+        try
+        {
+            var c = go.AddComponent<TestPlayController>();
+            c.robo = go.AddComponent<RoboStructure>(); c.robo.root = root;
+            c.robo.ani = new ani2 { animations = new List<animation>() };
+            for (int i = 0; i < 200; i++) c.robo.ani.animations.Add(new animation {
+                frames = new List<hod2v1>(), scripts = new List<script> {
+                    new script { unk = 100, time = 0, squirrel = "" } } });
+            c.useColliderGrounding = false;
+            c.useCameraRelativeMovement = c.useTargetRelativeMovement = false;
+            Action<string> call = name => typeof(TestPlayController).GetMethod(name, InstancePrivate).Invoke(c, null);
+            Action<int> shoot = id => typeof(TestPlayController).GetMethod("StartNormalAttackAction", InstancePrivate).Invoke(c, new object[] { id });
+            Action prepare = () => {
+                c.ChangeAnimation(c.idleAction); c.state.SetInt(190, 8);
+                c.maximumEnergy = 1000; c.currentEnergy = 1000;
+                c.state.SetInt(100, 1000); c.state.SetFloat(100, 1000);
+                SetField(c, "boostMotionActive", true); c.ChangeAnimation(c.boostAction);
+                SetField(c, "actionTick", 40); SetField(c, "scriptTick", 12);
+                SetField(c, "moveCommand", Vector3.forward * .25f);
+                SetField(c, "gvEnable", false); SetField(c, "forceCommand", Vector3.zero);
+                SetField(c, "velocity", Vector3.zero); SetField(c, "riseKeyHeld", false);
+                root.transform.SetPositionAndRotation(Vector3.up * 10, Quaternion.identity);
+            };
+            foreach (int id in new[] { 106, 107, 108 })
+            {
+                prepare(); shoot(id);
+                Require((bool)GetField(c, "boostMotionActive"), "boost shot retains locomotion " + id, ref assertions);
+                call("TickAnimation"); call("UpdateOriginalMovementEnergy");
+                float energy = c.currentEnergy;
+                Vector3 position = root.transform.position; call("ApplyRootMotion");
+                Require(root.transform.position.z > position.z && Mathf.Abs(root.transform.position.y - position.y) < .0001f,
+                    "shot retains forward speed and altitude " + id, ref assertions);
+                Require(energy == 995, "shot drains boost energy " + id, ref assertions);
+                call("FinishNormalAttackSequence");
+                Require(c.CurrentActionSelection.logicalActionId == c.boostAction && c.currentEnergy == energy,
+                    "shot resumes boost without entry cost " + id, ref assertions);
+                Require((int)GetField(c, "actionTick") == 41 && (int)GetField(c, "scriptTick") == 12,
+                    "resume keeps elapsed boost time and ANI cursor " + id, ref assertions);
+                position = root.transform.position; call("TickAnimation"); call("ApplyRootMotion");
+                Require(root.transform.position.z > position.z, "resume has no startup stop " + id, ref assertions);
+            }
+            prepare(); shoot(106); c.state.SetInt(190, 0); call("FinishNormalAttackSequence");
+            Require(c.CurrentActionSelection.logicalActionId == c.airIdleAction && !(bool)GetField(c, "boostMotionActive"),
+                "released input ends boost after shot", ref assertions);
+            prepare(); SetField(c, "actionTick", 6); shoot(106); c.state.SetInt(190, 0); call("FinishNormalAttackSequence");
+            Require(c.CurrentActionSelection.logicalActionId == c.boostAction,
+                "early release keeps original minimum boost duration", ref assertions);
+            prepare(); shoot(106); c.currentEnergy = 0; c.state.SetInt(100, 0); c.state.SetFloat(100, 0);
+            call("UpdateActionFromInput");
+            Require(!(bool)GetField(c, "boostMotionActive") && GetField(c, "boostShotContinuation") == null &&
+                !(bool)GetField(c, "attackSequenceActive"), "exhaustion cancels boost shot immediately", ref assertions);
+            prepare(); shoot(103); call("FinishNormalAttackSequence");
+            Require(c.CurrentActionSelection.logicalActionId == c.airIdleAction,
+                "rear shot retains original stopping branch", ref assertions);
+            prepare(); shoot(106); c.ChangeAnimation(17);
+            Require(GetField(c, "boostShotContinuation") == null && !(bool)GetField(c, "boostMotionActive"),
+                "reaction action discards boost continuation", ref assertions);
+            prepare(); shoot(106); call("ResetRuntimeFlags");
+            Require(GetField(c, "boostShotContinuation") == null, "session reset discards boost continuation", ref assertions);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(go); UnityEngine.Object.DestroyImmediate(root); }
     }
 
     static void VerifyOriginalJumpAndBoost(ref int assertions)

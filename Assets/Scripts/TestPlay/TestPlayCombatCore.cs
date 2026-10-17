@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using UnityEngine;
 
 public enum TestPlayCombatValueSource
@@ -23,7 +23,13 @@ public enum TestPlayAttackCollisionKind
     Unspecified,
     OriginalType1,
     OriginalType11,
-    OriginalType57
+    OriginalType57,
+    OriginalType6,
+    OriginalType9,
+    OriginalType26,
+    OriginalType18,
+    OriginalType31,
+    OriginalType5, OriginalType29, OriginalType32, OriginalType33, OriginalBeam, OriginalOrdnance, OriginalBlast
 }
 
 public enum TestPlayCombatHitDecision
@@ -150,6 +156,8 @@ public struct TestPlayProjectilePayload
 
 public struct TestPlayCombatHitResult
 {
+    // Display-only SetExtParam snapshot; never participates in damage/defense.
+    public int[] contactParameters;
     public string source;
     public float damage;
     public int down;
@@ -236,6 +244,7 @@ public struct TestPlayType1ProjectileTickResult
 /// </summary>
 public sealed class TestPlayMeleeAttackState
 {
+    public int[] contactParameters;
     public int SessionAttackId { get; internal set; }
     public int weaponPointId;
     public float length;
@@ -331,6 +340,8 @@ public static class TestPlayCombatCore
     public const float OriginalType1InitialAimConeDegrees = 20f;
     public const float OriginalType1HomingDistance = 100f;
     public const float OriginalType1BaseHomingTurnDegrees = 0.4f;
+    public const float OriginalType1FadePerTick = 0.01f;
+    public const float OriginalType1FadeEndWidth = 0.01f;
     public const int AttackCooldownSlotCount = 5;
     public const float OriginalShotForwardDotThreshold = 0.707f;
     public const float OriginalShotRearDotThreshold = -0.1f;
@@ -393,7 +404,8 @@ public static class TestPlayCombatCore
 
         int laserReflectValue = NormalizeOriginalLaserReflectValue(
             input.reflectionProbabilityPercent);
-        if (input.collisionKind == TestPlayAttackCollisionKind.OriginalType11 &&
+        if ((input.collisionKind == TestPlayAttackCollisionKind.OriginalType11 ||
+             IsOriginalCannon(input.collisionKind) || input.collisionKind == TestPlayAttackCollisionKind.OriginalBeam || input.collisionKind == TestPlayAttackCollisionKind.OriginalOrdnance) &&
             (input.attackFlag & 0x02) != 0 &&
             Mathf.Clamp(input.reflectionRoll, 0, 99) < laserReflectValue)
         {
@@ -478,10 +490,21 @@ public static class TestPlayCombatCore
 
     public static TestPlayAttackCollisionKind ResolveRunProcCollisionKind(int procType)
     {
+        if (TestPlayOrdnanceParameters.Supports(procType)) return procType==27||procType==35?TestPlayAttackCollisionKind.OriginalBlast:TestPlayAttackCollisionKind.OriginalOrdnance;
+        if (TestPlayBeamParameters.Supports(procType)) return TestPlayAttackCollisionKind.OriginalBeam;
         switch (procType)
         {
             case 1: return TestPlayAttackCollisionKind.OriginalType1;
+            case 6: return TestPlayAttackCollisionKind.OriginalType6;
+            case 9: return TestPlayAttackCollisionKind.OriginalType9;
             case 11: return TestPlayAttackCollisionKind.OriginalType11;
+            case 26: return TestPlayAttackCollisionKind.OriginalType26;
+            case 18: return TestPlayAttackCollisionKind.OriginalType18;
+            case 5: return TestPlayAttackCollisionKind.OriginalType5;
+            case 29: return TestPlayAttackCollisionKind.OriginalType29;
+            case 32: return TestPlayAttackCollisionKind.OriginalType32;
+            case 33: return TestPlayAttackCollisionKind.OriginalType33;
+            case 31: return TestPlayAttackCollisionKind.OriginalType31;
             case 57: return TestPlayAttackCollisionKind.OriginalType57;
             default: return TestPlayAttackCollisionKind.Unspecified;
         }
@@ -492,10 +515,20 @@ public static class TestPlayCombatCore
         switch (collisionKind)
         {
             case TestPlayAttackCollisionKind.OriginalType1:
+            case TestPlayAttackCollisionKind.OriginalType6:
                 return OriginalType1GuardDotThreshold;
+            case TestPlayAttackCollisionKind.OriginalOrdnance:
+            case TestPlayAttackCollisionKind.OriginalBeam:
             case TestPlayAttackCollisionKind.OriginalType11:
+            case TestPlayAttackCollisionKind.OriginalType9:
+            case TestPlayAttackCollisionKind.OriginalType26:
+            case TestPlayAttackCollisionKind.OriginalType18:
                 return OriginalType11GuardDotThreshold;
             case TestPlayAttackCollisionKind.OriginalType57:
+            case TestPlayAttackCollisionKind.OriginalType29:
+            case TestPlayAttackCollisionKind.OriginalType32:
+            case TestPlayAttackCollisionKind.OriginalType33:
+            case TestPlayAttackCollisionKind.OriginalType31:
                 return OriginalType57GuardDotThreshold;
             default:
                 return float.PositiveInfinity;
@@ -943,6 +976,8 @@ public static class TestPlayCombatCore
     }
 
     // One geometry/lifetime update for all session targets. Legacy single-target entry stays intact.
+    // Session collision uses the tick-start CharacterController capsule. This is a Unity adapter
+    // for the original defender compound shape, not a claim that the EXE used a capsule.
     public static TestPlayMeleeTickResult TickMeleeAttackTargets(
         TestPlayMeleeAttackState state, Vector3 origin, Vector3 forward,
         System.Collections.Generic.IReadOnlyList<TestPlayTargetSnapshot> targets,
@@ -957,8 +992,9 @@ public static class TestPlayCombatCore
             state.TickTargetRehitCooldowns();
             foreach (var target in targets)
                 if (target.Alive && !state.HasHitTarget(target.Handle.MechId) &&
-                    IntersectsSweptSegmentSphere(state.previousOrigin, state.previousTip, origin, tip,
-                        target.Position, target.Radius) && state.TryMarkTargetHit(target.Handle.MechId))
+                    IntersectsSweptSegmentCapsule(state.previousOrigin, state.previousTip, origin, tip,
+                        target.ShotCapsuleStart, target.ShotCapsuleEnd, target.ShotCapsuleRadius) &&
+                    state.TryMarkTargetHit(target.Handle.MechId))
                     hits.Add(target);
             state.remainingTicks--;
         }
@@ -991,6 +1027,28 @@ public static class TestPlayCombatCore
         distanceSquared = Mathf.Min(distanceSquared,
             PointTriangleDistanceSquared(sphereCenter, previousOrigin, currentTip, currentOrigin));
         return distanceSquared <= radiusSquared;
+    }
+
+    /// <summary>
+    /// The swept blade quad is split into two triangles and compared with a capsule axis.
+    /// This catches torso-height and between-tick crossings without inflating the root sphere.
+    /// </summary>
+    public static bool IntersectsSweptSegmentCapsule(
+        Vector3 previousOrigin,
+        Vector3 previousTip,
+        Vector3 currentOrigin,
+        Vector3 currentTip,
+        Vector3 capsuleStart,
+        Vector3 capsuleEnd,
+        float capsuleRadius)
+    {
+        float radius = Mathf.Max(0f, capsuleRadius);
+        float distanceSquared = Mathf.Min(
+            SegmentTriangleDistanceSquared(capsuleStart, capsuleEnd,
+                previousOrigin, previousTip, currentTip),
+            SegmentTriangleDistanceSquared(capsuleStart, capsuleEnd,
+                previousOrigin, currentTip, currentOrigin));
+        return distanceSquared <= radius * radius;
     }
 
     static float PointSegmentDistanceSquared(Vector3 point, Vector3 start, Vector3 end)
@@ -1061,6 +1119,50 @@ public static class TestPlayCombatCore
         return (point - closest).sqrMagnitude;
     }
 
+    static float SegmentTriangleDistanceSquared(
+        Vector3 segmentStart, Vector3 segmentEnd,
+        Vector3 a, Vector3 b, Vector3 c)
+    {
+        if (SegmentIntersectsTriangle(segmentStart, segmentEnd, a, b, c))
+            return 0f;
+
+        return Mathf.Min(
+            Mathf.Min(
+                PointTriangleDistanceSquared(segmentStart, a, b, c),
+                PointTriangleDistanceSquared(segmentEnd, a, b, c)),
+            Mathf.Min(
+                SegmentSegmentDistanceSquared(segmentStart, segmentEnd, a, b),
+                Mathf.Min(
+                    SegmentSegmentDistanceSquared(segmentStart, segmentEnd, b, c),
+                    SegmentSegmentDistanceSquared(segmentStart, segmentEnd, c, a))));
+    }
+
+    static bool SegmentIntersectsTriangle(
+        Vector3 segmentStart, Vector3 segmentEnd,
+        Vector3 a, Vector3 b, Vector3 c)
+    {
+        Vector3 direction = segmentEnd - segmentStart;
+        Vector3 edge1 = b - a;
+        Vector3 edge2 = c - a;
+        Vector3 p = Vector3.Cross(direction, edge2);
+        float determinant = Vector3.Dot(edge1, p);
+        const float epsilon = 0.0000001f;
+        if (Mathf.Abs(determinant) <= epsilon)
+            return false;
+
+        float inverse = 1f / determinant;
+        Vector3 fromA = segmentStart - a;
+        float u = Vector3.Dot(fromA, p) * inverse;
+        if (u < 0f || u > 1f)
+            return false;
+        Vector3 q = Vector3.Cross(fromA, edge1);
+        float v = Vector3.Dot(direction, q) * inverse;
+        if (v < 0f || u + v > 1f)
+            return false;
+        float alongSegment = Vector3.Dot(edge2, q) * inverse;
+        return alongSegment >= 0f && alongSegment <= 1f;
+    }
+
     public static TestPlayType1ProjectileParameters CreateOriginalType1Parameters(
         int weaponPointId,
         int energyCost,
@@ -1096,6 +1198,115 @@ public static class TestPlayCombatCore
         float distanceFactor = 1f - Mathf.Clamp01(targetDistance / OriginalType1HomingDistance);
         float percentFactor = 1f + homingPercent / 100f;
         return Mathf.Max(0f, OriginalType1BaseHomingTurnDegrees * distanceFactor * percentFactor);
+    }
+
+    // FUN_004ea9f0 (uncharged LZ_Bullet). WeaponAttack supplies zero for omitted
+    // parameters. Unlike type 1, width/speed/trail have base values and p4 is additive.
+    public static TestPlayType1ProjectileParameters CreateOriginalType6Parameters(
+        int weaponPointId, int energyCost, int widthOffset, int speedOffset,
+        int trailOffset, int homingOffset)
+    {
+        return new TestPlayType1ProjectileParameters {
+            weaponPointId = weaponPointId, energyCost = Mathf.Max(0, energyCost),
+            visualWidth = Mathf.Max(0f, 0.05f + widthOffset / 100f),
+            distancePerTick = Mathf.Max(0f, 0.9f + speedOffset / 100f),
+            trailPointCount = Mathf.Max(2, 3 + trailOffset), homingPercent = homingOffset,
+            textureId = 16, activeTicks = 300, trailMode = 0
+        };
+    }
+
+    public static float ResolveOriginalType6HomingTurnDegrees(float distance, int offset)
+    {
+        return Mathf.Max(0f, 0.4f * (1f - Mathf.Clamp01(distance / 100f)) + offset / 100f);
+    }
+
+    // FUN_004ed430: one uncharged LZ_Bullet per command. Tail operands are
+    // ignored; multiple shots come from ANI commands, not a handler loop.
+    public static TestPlayType1ProjectileParameters CreateOriginalType11Parameters(int point, int cost)
+    {
+        return new TestPlayType1ProjectileParameters {
+            weaponPointId = point, energyCost = Mathf.Max(0, cost),
+            visualWidth = .05f, distancePerTick = 1.1f, trailPointCount = 3,
+            textureId = 16, activeTicks = 300, trailMode = 1
+        };
+    }
+
+    // FUN_004ec260 / FUN_004683a0: uncharged LZ_Canon. No gravity/homing/AOE.
+    // The 180-tick life and one-contact budget are distinct from its 5 trail points.
+    public static TestPlayType1ProjectileParameters CreateOriginalType9Parameters(int point, int cost)
+    {
+        return new TestPlayType1ProjectileParameters {
+            weaponPointId = point, energyCost = Mathf.Max(0, cost), visualWidth = .3f,
+            distancePerTick = 3f, trailPointCount = 5, textureId = 7, activeTicks = 180, trailMode = 1
+        };
+    }
+
+    public static bool IsOriginalCannon(TestPlayAttackCollisionKind kind) =>
+        kind == TestPlayAttackCollisionKind.OriginalType9 || kind == TestPlayAttackCollisionKind.OriginalType26 ||
+        kind == TestPlayAttackCollisionKind.OriginalType18;
+
+    // FUN_004f0c30: normal Canon with optional model, fixed .8 speed/.15 width.
+    public static TestPlayType1ProjectileParameters CreateOriginalType18Parameters(int point, int cost)
+    {
+        var parameters = CreateOriginalType9Parameters(point, cost);
+        parameters.distancePerTick = .8f;
+        parameters.visualWidth = .15f;
+        return parameters;
+    }
+
+    public static float ResolveOriginalType18Homing(float distance) =>
+        distance < 100f ? (1f - Mathf.Max(0f, distance) / 100f) * .55f : 0f;
+
+    // FUN_004f8040 / FUN_0047ebf0: ordinary LZ_SwordThrow, model-only rendering.
+    public static TestPlayType1ProjectileParameters CreateOriginalType31Parameters(int point, int cost) =>
+        new TestPlayType1ProjectileParameters { weaponPointId=point, energyCost=Mathf.Max(0,cost),
+            distancePerTick=.8f, visualWidth=.2f, trailPointCount=3, textureId=-1, activeTicks=180 };
+
+    public static float ResolveOriginalType31Homing(float distance) =>
+        distance < 100f ? (1f-Mathf.Max(0f,distance)/100f)*.35f : 0f;
+
+    // p5 overrides the original +bbc suppression flag only for the literal 1.
+    public static bool ResolveOriginalType18TargetLink(bool hasTarget, bool suppressed, int mode) =>
+        hasTarget && (!suppressed || mode == 1);
+
+    public static Quaternion ResolveOriginalType18Scatter(Quaternion aimed, int spread, int yawSample, int pitchSample)
+    {
+        // Original Y then X matrix composition, adapted to Unity column vectors.
+        int extent = Mathf.Max(0, spread);
+        return aimed * Quaternion.AngleAxis(Mathf.Clamp(pitchSample, -extent, extent), Vector3.right) *
+            Quaternion.AngleAxis(Mathf.Clamp(yawSample, -extent, extent), Vector3.up);
+    }
+
+    // FUN_004f5c70: LZ_Canon2 keeps the Canon initialization, except signed p4/100 speed.
+    // Its overridden contact callbacks do not clear life (unlike LZ_Canon).
+    public static TestPlayType1ProjectileParameters CreateOriginalType26Parameters(int point, int cost, int speed)
+    {
+        var parameters = CreateOriginalType9Parameters(point, cost);
+        parameters.distancePerTick = speed * .01f;
+        return parameters;
+    }
+
+    public static Quaternion ResolveOriginalType11InitialRotation(Quaternion muzzle,
+        Vector3 position, bool locked, Vector3 target, Vector3 signedSamples)
+    {
+        if (!locked) return muzzle;
+        // Original world-axis scatter is +/- distance/50, then direct look-at.
+        // Samples are supplied by the adapter; the original shared RNG is not reproduced.
+        Vector3 scatter = new Vector3(Mathf.Clamp(signedSamples.x, -1, 1),
+            Mathf.Clamp(signedSamples.y, -1, 1), Mathf.Clamp(signedSamples.z, -1, 1));
+        Vector3 direction = target + scatter * (Vector3.Distance(position, target) / 50f) - position;
+        return direction.sqrMagnitude > .000001f ? Quaternion.LookRotation(direction, Vector3.up) : muzzle;
+    }
+
+    public static int Type11ReflectionRoll(int attackId, int targetId, int tick)
+    {
+        // Unity alternative: stable per-contact RNG, independent of UnityEngine.Random
+        // and other presentation sampling. The original consumes FUN_00576390()%100.
+        unchecked {
+            uint value = (uint)attackId * 0x9E3779B9u ^ (uint)targetId * 0x85EBCA6Bu ^ (uint)tick;
+            value ^= value >> 16; value *= 0x7FEB352Du; value ^= value >> 15;
+            return (int)(value % 100);
+        }
     }
 
     /// <summary>FUN_004e8310 / FUN_0055fb50の20度以内target初期照準。</summary>
@@ -1169,6 +1380,16 @@ public static class TestPlayCombatCore
     }
 
     /// <summary>
+    /// FUN_00460200 decreases the visible width by 0.01 on the lifetime-ending
+    /// update and every following update, then removes the beam below 0.01.
+    /// </summary>
+    public static bool AdvanceOriginalType1Fade(ref float width)
+    {
+        width -= OriginalType1FadePerTick;
+        return width >= OriginalType1FadeEndWidth;
+    }
+
+    /// <summary>
     /// 原作はtarget側の複合形状をtrail線分へ照合する。Unity TestPlayでは単一球形targetを
     /// 明示的Adapterとして使うため、この関数は線分対球だけを担当する。
     /// </summary>
@@ -1186,6 +1407,14 @@ public static class TestPlayCombatCore
     // a sphere. This also handles zero-length trails and sphere-only fixtures.
     public static bool IntersectsTrailSegmentCapsule(Vector3 start, Vector3 end,
         Vector3 axisStart, Vector3 axisEnd, float radius)
+    {
+        float safeRadius = Mathf.Max(0f, radius);
+        return SegmentSegmentDistanceSquared(start, end, axisStart, axisEnd) <=
+               safeRadius * safeRadius;
+    }
+
+    static float SegmentSegmentDistanceSquared(Vector3 start, Vector3 end,
+        Vector3 axisStart, Vector3 axisEnd)
     {
         Vector3 d1 = end - start, d2 = axisEnd - axisStart, r = start - axisStart;
         float a = Vector3.Dot(d1, d1), e = Vector3.Dot(d2, d2), f = Vector3.Dot(d2, r);
@@ -1206,8 +1435,7 @@ public static class TestPlayCombatCore
                 else if (t > 1f) { t = 1f; s = Mathf.Clamp01((b - c) / a); }
             }
         }
-        float safeRadius = Mathf.Max(0f, radius);
-        return (r + d1 * s - d2 * t).sqrMagnitude <= safeRadius * safeRadius;
+        return (r + d1 * s - d2 * t).sqrMagnitude;
     }
 
     public static TestPlayProjectileTickResult TickProjectile(TestPlayProjectileTickInput input)

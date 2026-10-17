@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,6 +15,8 @@ public readonly struct MechHandle
 
 public sealed class TestPlayMechSpawn
 {
+    /// <summary>Null keeps the original free-for-all session behavior.</summary>
+    public int? TeamId;
     public string SourcePath;
     public Vector3 Position;
     public Quaternion Rotation = Quaternion.identity;
@@ -76,6 +78,7 @@ public interface ITestPlayTargetProvider
 /// <summary>Stable identity plus references to one controller's authoritative state.</summary>
 public sealed class MechRuntime
 {
+    public int TeamId { get; internal set; }
     public MechHandle Handle { get; internal set; }
     public TestPlayController Controller { get; internal set; }
     public MechAssetLease Assets { get; internal set; }
@@ -127,7 +130,7 @@ public sealed class GameSession : ITestPlayTargetProvider
         {
             if (s == null || s.Input == null || !float.IsFinite(s.TargetRadius) || s.TargetRadius <= 0)
                 throw new ArgumentException("入力providerと正の対象半径が必要です。");
-            requests.Add(new TestPlayMechSpawn { SourcePath = s.SourcePath, Position = s.Position,
+            requests.Add(new TestPlayMechSpawn { TeamId = s.TeamId, SourcePath = s.SourcePath, Position = s.Position,
                 Rotation = s.Rotation, TargetRadius = s.TargetRadius, Input = s.Input,
                 Camera = s.Camera, ShowHud = s.ShowHud, HudCanvas = s.HudCanvas,
                 PresentationTemplate = s.PresentationTemplate,
@@ -143,7 +146,8 @@ public sealed class GameSession : ITestPlayTargetProvider
                 var data = await MechLoader.LoadAsync(s.SourcePath, null, token);
                 var assets = await UnityMechBuilder.BuildAsync(data, s.SourcePath, token, s.Host);
                 var mech = new MechRuntime { Handle = new MechHandle(session.SessionId, session.mechs.Count + 1),
-                    Assets = assets, Input = s.Input, TargetRadius = s.TargetRadius };
+                    Assets = assets, Input = s.Input, TargetRadius = s.TargetRadius,
+                    TeamId = s.TeamId ?? -(session.mechs.Count + 1) };
                 session.mechs.Add(mech);
                 if (assets.OwnsHost)
                     assets.Host.name = "SessionMech_" + mech.Handle.MechId;
@@ -163,6 +167,8 @@ public sealed class GameSession : ITestPlayTargetProvider
                 await Task.Yield();
                 token.ThrowIfCancellationRequested();
             }
+            foreach (var mech in session.mechs)
+                if (mech.Input is TestPlayCpuInputProvider cpu) cpu.Bind(mech);
             session.Status = "Ready";
             return session;
         }
@@ -226,6 +232,16 @@ public sealed class GameSession : ITestPlayTargetProvider
         try
         {
             var inputs = new TestPlaySessionInput[mechs.Count];
+            // Freeze all CPU observations before ANY provider reads or mech writes.
+            // Hit/lock CaptureTargets below keeps its existing contract and order.
+            if (mechs.Exists(m => m.Input is TestPlayCpuInputProvider))
+            {
+                var actors = new TestPlayCpuActorSnapshot[mechs.Count];
+                for (int i = 0; i < mechs.Count; i++) actors[i] = new TestPlayCpuActorSnapshot(mechs[i]);
+                foreach (var mech in mechs)
+                    if (mech.Input is TestPlayCpuInputProvider cpu)
+                        cpu.Prepare(actors, Tick + 1, IsCombatEnded, GetCpuThreatDistance(mech.Handle, actors[mech.Handle.MechId - 1].position));
+            }
             for (int i = 0; i < mechs.Count; i++) inputs[i] = mechs[i].Input.Read(mechs[i].Handle.MechId, Tick + 1);
             CaptureTargets();
             int existingProjectiles = projectiles.Count;
@@ -250,12 +266,28 @@ public sealed class GameSession : ITestPlayTargetProvider
         finally { stepping = false; }
     }
 
+    // C3 Unity adapter: target-linked live moving projectiles at the preceding
+    // completed tick. Not all enemies, not time-to-impact, not a native writer trace.
+    internal float GetCpuThreatDistance(MechHandle target, Vector3 position)
+    {
+        float nearest = float.MaxValue;
+        foreach (var p in projectiles)
+        {
+            if (p == null || !p.CpuThreatActive || p.ModelGuidance.SessionId != target.SessionId ||
+                p.ModelGuidance.MechId != target.MechId || SameTeam(p.OwnerHandle, target)) continue;
+            float distance = Vector3.Distance(p.transform.position, position);
+            if (distance > 0 && distance < nearest) nearest = distance;
+        }
+        return nearest;
+    }
+
     void Fault(Exception e)
     {
         Failure = e.Message;
         Status = "Faulted";
         // Immediately stop simulation and presentation. Asset release is awaited by StopAsync.
         foreach (var mech in mechs) if (mech.Controller != null) mech.Controller.StopTestPlay();
+        foreach (var mech in mechs) if (mech.Input is TestPlayCpuInputProvider cpu) cpu.Dispose();
     }
 
     void CaptureTargets()
@@ -284,7 +316,7 @@ public sealed class GameSession : ITestPlayTargetProvider
         var result = new List<TestPlayTargetSnapshot>();
         if (!TryGet(owner, out var source)) return result;
         foreach (var candidate in snapshots.Values)
-            if (candidate.Handle.MechId != owner.MechId && TryGet(candidate.Handle, out _) &&
+            if (candidate.Handle.MechId != owner.MechId && !SameTeam(owner, candidate.Handle) && TryGet(candidate.Handle, out _) &&
                 (maximumDistance <= 0 || Vector3.Distance(source.Position, candidate.Position) <= maximumDistance))
                 result.Add(candidate);
         result.Sort((a, b) => {
@@ -296,6 +328,13 @@ public sealed class GameSession : ITestPlayTargetProvider
 
     internal Transform GetSnapshotTransform(MechHandle handle) => TryGet(handle, out _)
         ? mechs[handle.MechId - 1].SnapshotTransform : null;
+
+    public bool SameTeam(MechHandle a, MechHandle b) => a.SessionId == SessionId && b.SessionId == SessionId &&
+        a.MechId > 0 && a.MechId <= mechs.Count && b.MechId > 0 && b.MechId <= mechs.Count &&
+        mechs[a.MechId - 1].TeamId == mechs[b.MechId - 1].TeamId;
+
+    internal TestPlayController GetController(MechHandle handle) => handle.SessionId == SessionId &&
+        handle.MechId > 0 && handle.MechId <= mechs.Count ? mechs[handle.MechId - 1].Controller : null;
 
     // Flying attacks survive their owner. Collision queries do not require a living owner.
     internal IReadOnlyList<TestPlayTargetSnapshot> QueryAttackTargets(MechHandle owner, Vector3 origin)
@@ -328,7 +367,8 @@ public sealed class GameSession : ITestPlayTargetProvider
             !TryGet(target, out var snapshot)) return false;
         var defender = mechs[target.MechId - 1].Controller;
         float before = defender.currentHP;
-        resolved = defender.ResolveSessionImpact(hit, attackerPosition, snapshot, melee, hitStopTicks);
+        resolved = defender.ResolveSessionImpact(hit, attackerPosition, snapshot, melee, hitStopTicks,
+            TestPlayCombatCore.Type11ReflectionRoll(attackId, target.MechId, Tick));
         HitResolved?.Invoke(new TestPlaySessionHit { sessionId = SessionId.ToString(), tick = Tick,
             attackId = attackId, ownerId = owner.MechId, targetId = target.MechId,
             decision = resolved.decision, requestedDamage = hit.damage, damage = before - defender.currentHP,
@@ -346,6 +386,15 @@ public sealed class GameSession : ITestPlayTargetProvider
             throw new InvalidOperationException("停止中のセッションには弾を追加できません。");
         projectile.AttachSession(this, AllocateAttackId(owner), owner, guidance);
         projectiles.Add(projectile);
+    }
+
+    // Children inherit a registered attack's ownership, including after owner defeat.
+    // This preserves SessionId/AttackId ordering without permitting a new dead-mech input.
+    internal void RegisterChildProjectile(TestPlayProjectile child,TestPlayProjectile parent,MechHandle guidance)
+    {
+        if(Status!="Running" || parent==null || parent.ModelSession!=this || parent.AttackId<=0 || parent.AttackId>nextAttackId)
+            throw new InvalidOperationException("Child attack requires a registered parent in this session.");
+        child.AttachSession(this,++nextAttackId,parent.OwnerHandle,guidance);projectiles.Add(child);
     }
 
     public Task StopAsync()
@@ -380,6 +429,7 @@ public sealed class GameSession : ITestPlayTargetProvider
         var failures = new List<Exception>();
         foreach (var mech in mechs)
         {
+            if (mech.Input is TestPlayCpuInputProvider cpu) cpu.Dispose();
             mech.Input = null;
             try { await mech.Assets.ReleaseAsync(); }
             catch (Exception e) { failures.Add(e); }

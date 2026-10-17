@@ -7,8 +7,7 @@ using UnityEngine;
 
 public static class TestPlayOriginalTextureSetup
 {
-    const string SourceFolder = "Assets/IMG_TX";
-    const string OutputFolder = "Assets/Generated/TestPlay/OriginalTextures";
+    const string SourceFolder = "Windom_Data/Texture";
     const string EffectShaderName = "WindomXP/TestPlayOriginalEffect";
 
     struct OriginalTextureSpec
@@ -100,70 +99,12 @@ public static class TestPlayOriginalTextureSetup
 
     public static int ApplyMappings(TestPlayPresentationRuntime presentation, out List<string> missing)
     {
-        if (presentation == null)
-            throw new ArgumentNullException(nameof(presentation));
-
-        EnsureOutputFolder();
-        Dictionary<string, string> sourcePaths = FindSourceFiles();
-        List<KeyValuePair<OriginalTextureSpec, string>> generated = new List<KeyValuePair<OriginalTextureSpec, string>>();
+        if (presentation == null) throw new ArgumentNullException(nameof(presentation));
+        presentation.LoadExternalResources();
         missing = new List<string>();
-
-        for (int i = 0; i < OriginalTextures.Length; i++)
-        {
-            OriginalTextureSpec spec = OriginalTextures[i];
-            if (!sourcePaths.TryGetValue(spec.fileName, out string sourceAssetPath))
-            {
-                missing.Add(spec.loadSequence + ":" + spec.fileName);
-                continue;
-            }
-
-            string outputAssetPath = OutputFolder + "/" + spec.loadSequence.ToString("D2") + "_" + Path.GetFileName(spec.fileName);
-            WriteDecryptedImage(sourceAssetPath, outputAssetPath);
-            generated.Add(new KeyValuePair<OriginalTextureSpec, string>(spec, outputAssetPath));
-        }
-
-        if (!sourcePaths.ContainsKey("blueLight.bmp") && sourcePaths.TryGetValue("beamHit4.png", out string guide39Source))
-        {
-            OriginalTextureSpec guide39 = new OriginalTextureSpec(-1, "beamHit4.png", 39);
-            string outputAssetPath = OutputFolder + "/Guide39_beamHit4.png";
-            WriteDecryptedImage(guide39Source, outputAssetPath);
-            generated.Add(new KeyValuePair<OriginalTextureSpec, string>(guide39, outputAssetPath));
-        }
-
-        AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
-        for (int i = 0; i < generated.Count; i++)
-        {
-            AssetDatabase.ImportAsset(
-                generated[i].Value,
-                ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
-        }
-        List<TestPlayTextureBinding> bindings = new List<TestPlayTextureBinding>();
-        for (int i = 0; i < generated.Count; i++)
-        {
-            OriginalTextureSpec spec = generated[i].Key;
-            string assetPath = generated[i].Value;
-            ConfigureGeneratedTexture(assetPath, spec);
-            Texture2D texture = AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
-            if (texture == null)
-                throw new InvalidDataException("Decrypted texture could not be imported: " + assetPath);
-            bindings.Add(new TestPlayTextureBinding
-            {
-                loadSequence = spec.loadSequence,
-                scriptTextureId = spec.scriptTextureId,
-                originalFileName = spec.fileName,
-                texture = texture
-            });
-        }
-
-        Shader shader = Shader.Find(EffectShaderName);
-        if (shader == null)
-            throw new InvalidOperationException("Original effect shader was not found: " + EffectShaderName);
-
-        Undo.RecordObject(presentation, "Rebuild original IMG_TX mappings");
-        presentation.originalTextures = bindings;
-        presentation.originalEffectShader = shader;
-        EditorUtility.SetDirty(presentation);
-        return generated.Count;
+        foreach (var spec in TestPlayExternalResourceCatalog.Textures)
+            if (!presentation.HasOriginalNamedTexture(spec.originalFileName)) missing.Add(spec.originalFileName);
+        return presentation.MappedTextureBindingCount;
     }
 
     public static bool TryGetLoadSequenceFileName(int loadSequence, out string fileName)
@@ -194,124 +135,4 @@ public static class TestPlayOriginalTextureSetup
         return false;
     }
 
-    static Dictionary<string, string> FindSourceFiles()
-    {
-        Dictionary<string, string> result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        string absoluteSource = ToAbsolutePath(SourceFolder);
-        if (!Directory.Exists(absoluteSource))
-            return result;
-
-        string[] files = Directory.GetFiles(absoluteSource, "*", SearchOption.TopDirectoryOnly);
-        for (int i = 0; i < files.Length; i++)
-        {
-            string extension = Path.GetExtension(files[i]);
-            if (!extension.Equals(".png", StringComparison.OrdinalIgnoreCase) && !extension.Equals(".bmp", StringComparison.OrdinalIgnoreCase))
-                continue;
-            string fileName = Path.GetFileName(files[i]);
-            if (result.ContainsKey(fileName))
-                throw new InvalidOperationException("Duplicate original texture filename: " + fileName);
-            result.Add(fileName, SourceFolder + "/" + fileName);
-        }
-        return result;
-    }
-
-    static void WriteDecryptedImage(string sourceAssetPath, string outputAssetPath)
-    {
-        string sourceAbsolutePath = ToAbsolutePath(sourceAssetPath);
-        byte[] sourceBytes = File.ReadAllBytes(sourceAbsolutePath);
-        string extension = Path.GetExtension(sourceAssetPath);
-        bool expectsPng = extension.Equals(".png", StringComparison.OrdinalIgnoreCase);
-        bool expectsBmp = extension.Equals(".bmp", StringComparison.OrdinalIgnoreCase);
-        byte[] imageBytes;
-        if ((expectsPng && HasPngSignature(sourceBytes)) || (expectsBmp && HasBmpSignature(sourceBytes)))
-        {
-            imageBytes = sourceBytes;
-        }
-        else
-        {
-            CypherTranscoder transcoder = new CypherTranscoder();
-            if (expectsPng && !transcoder.findCypher(sourceAbsolutePath))
-                throw new InvalidDataException("Could not determine original texture cipher: " + sourceAssetPath);
-            imageBytes = TranscodeAllImageBytes(sourceBytes, transcoder.cypher);
-        }
-
-        if ((expectsPng && !HasPngSignature(imageBytes)) || (expectsBmp && !HasBmpSignature(imageBytes)))
-            throw new InvalidDataException("Decrypted data has an invalid image signature: " + sourceAssetPath);
-        if (expectsPng)
-            imageBytes = NormalizePngForUnityImporter(imageBytes, sourceAssetPath);
-        File.WriteAllBytes(ToAbsolutePath(outputAssetPath), imageBytes);
-    }
-
-    static byte[] NormalizePngForUnityImporter(byte[] imageBytes, string sourceAssetPath)
-    {
-        // The DX9-era files decode through ImageConversion.LoadImage, but some contain
-        // legacy PNG details rejected by Unity 6's asset importer. Re-encoding only the
-        // generated copy keeps the original encrypted source untouched.
-        Texture2D decoded = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-        try
-        {
-            if (!ImageConversion.LoadImage(decoded, imageBytes, false))
-                throw new InvalidDataException("Decrypted PNG data could not be decoded: " + sourceAssetPath);
-            byte[] normalized = ImageConversion.EncodeToPNG(decoded);
-            if (normalized == null || normalized.Length == 0)
-                throw new InvalidDataException("Decrypted PNG data could not be normalized: " + sourceAssetPath);
-            return normalized;
-        }
-        finally
-        {
-            UnityEngine.Object.DestroyImmediate(decoded);
-        }
-    }
-
-    static byte[] TranscodeAllImageBytes(byte[] sourceBytes, uint cypher)
-    {
-        // CypherTranscoder intentionally leaves incomplete 4-byte blocks untouched for
-        // Script.spt compatibility. Image files need the repeating key applied through
-        // the final byte so their PNG/BMP trailer remains valid for Unity's importer.
-        byte[] imageBytes = (byte[])sourceBytes.Clone();
-        byte[] cypherBytes = BitConverter.GetBytes(cypher);
-        for (int i = 0; i < imageBytes.Length; i++)
-            imageBytes[i] ^= cypherBytes[i & 3];
-        return imageBytes;
-    }
-
-    static bool HasPngSignature(byte[] bytes)
-    {
-        return bytes != null && bytes.Length >= 8 &&
-            bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4e && bytes[3] == 0x47 &&
-            bytes[4] == 0x0d && bytes[5] == 0x0a && bytes[6] == 0x1a && bytes[7] == 0x0a;
-    }
-
-    static bool HasBmpSignature(byte[] bytes)
-    {
-        return bytes != null && bytes.Length >= 2 && bytes[0] == 0x42 && bytes[1] == 0x4d;
-    }
-
-    static void ConfigureGeneratedTexture(string assetPath, OriginalTextureSpec spec)
-    {
-        TextureImporter importer = AssetImporter.GetAtPath(assetPath) as TextureImporter;
-        if (importer == null)
-            return;
-        importer.textureType = TextureImporterType.Default;
-        importer.alphaSource = TextureImporterAlphaSource.FromInput;
-        importer.alphaIsTransparency = false;
-        importer.mipmapEnabled = true;
-        importer.wrapMode = TextureWrapMode.Clamp;
-        importer.filterMode = FilterMode.Bilinear;
-        importer.isReadable = false;
-        importer.userData = "WindomXP original effect loadSequence=" + spec.loadSequence +
-            " scriptTextureId=" + spec.scriptTextureId + " source=" + spec.fileName;
-        importer.SaveAndReimport();
-    }
-
-    static void EnsureOutputFolder()
-    {
-        Directory.CreateDirectory(ToAbsolutePath(OutputFolder));
-    }
-
-    static string ToAbsolutePath(string assetPath)
-    {
-        string projectRoot = Directory.GetParent(Application.dataPath).FullName;
-        return Path.Combine(projectRoot, assetPath.Replace('/', Path.DirectorySeparatorChar));
-    }
 }

@@ -1,8 +1,12 @@
 using UnityEngine;
+using System.Collections.Generic;
 
 public class TestPlayThunderEffect : MonoBehaviour
 {
-    Transform[] planes;
+    TestPlayType1TrailEffect trail;
+    readonly List<Vector3> positions = new List<Vector3>();
+    int activeTicks;
+    public IReadOnlyList<Vector3> Points => positions;
     Vector3 spawnPosition;
     Quaternion spawnRotation;
     Vector3 movementDirection;
@@ -18,7 +22,7 @@ public class TestPlayThunderEffect : MonoBehaviour
     public Vector3 SpawnPosition => spawnPosition;
     public Quaternion SpawnRotation => spawnRotation;
     public Vector3 MovementDirection => movementDirection;
-    public bool HasTextureLayer => planes != null && planes.Length > 0;
+    public bool HasTextureLayer => trail != null;
 
     public void Initialize(
         TestPlayThunderEffectParameters parameters,
@@ -32,7 +36,9 @@ public class TestPlayThunderEffect : MonoBehaviour
         OriginalLength = parameters.length;
         InitialWidth = parameters.width;
         ScatterRadius = parameters.scatterRadius;
-        planes = texturePlanes ?? new Transform[0];
+        trail = texturePlanes != null && texturePlanes.Length > 0 ? texturePlanes[0].GetComponent<TestPlayType1TrailEffect>() : null;
+        activeTicks = parameters.activeTicks;
+        positions.Clear(); positions.Add(position);
         spawnPosition = position;
         spawnRotation = rotation;
         movementDirection = direction.sqrMagnitude > 0.000001f
@@ -46,6 +52,7 @@ public class TestPlayThunderEffect : MonoBehaviour
     {
         CurrentWidth = width;
         TravelDistance = travelDistance;
+        bool advance = elapsedTicks > AppliedTicks;
         AppliedTicks = elapsedTicks;
 
         Vector3 localScatter = elapsedTicks > 0
@@ -56,31 +63,14 @@ public class TestPlayThunderEffect : MonoBehaviour
             : Vector3.zero;
         transform.position = spawnPosition + movementDirection * travelDistance + spawnRotation * localScatter;
         transform.rotation = spawnRotation;
-        ConfigureCrossedPlanes();
-    }
-
-    void ConfigureCrossedPlanes()
-    {
-        float displayWidth = Mathf.Max(0.001f, Mathf.Abs(CurrentWidth));
-        float displayLength = Mathf.Max(0.001f, Mathf.Abs(OriginalLength));
-        for (int i = 0; i < planes.Length; i++)
+        // The original adds scattered samples only while active; fade keeps the
+        // existing world-space history. RNG values remain a deterministic adapter.
+        if (advance && elapsedTicks < activeTicks)
         {
-            Transform plane = planes[i];
-            if (plane == null)
-                continue;
-
-            plane.localPosition = Vector3.forward * (displayLength * 0.5f);
-            if ((i & 1) == 0)
-            {
-                plane.localRotation = Quaternion.Euler(90f, 0f, 0f);
-                plane.localScale = new Vector3(displayWidth, displayLength, 1f);
-            }
-            else
-            {
-                plane.localRotation = Quaternion.Euler(0f, -90f, 0f);
-                plane.localScale = new Vector3(displayLength, displayWidth, 1f);
-            }
+            positions.Add(transform.position);
+            while (positions.Count > Mathf.Max(1, OriginalLength)) positions.RemoveAt(0);
         }
+        trail?.SetTrail(positions); trail?.SetWidth(Mathf.Max(0, CurrentWidth));
     }
 
     static float SampleSigned(int weaponPointId, int tick, int axis)

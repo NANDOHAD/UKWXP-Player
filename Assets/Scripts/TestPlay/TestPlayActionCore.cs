@@ -49,7 +49,7 @@ public static class TestPlayActionCore
             scriptActionId = logicalActionId;
         }
 
-        bool dualChannels = logicalActionId >= 0 && logicalActionId < 50;
+        bool dualChannels = UsesOriginalDualAniChannels(poseActionId);
         return new TestPlayActionSelection
         {
             requestedActionId = requestedActionId,
@@ -70,7 +70,13 @@ public static class TestPlayActionCore
     public static bool UsesOriginalDualAniChannels(int actionId)
     {
         int logicalActionId = GetLogicalActionId(actionId);
-        return logicalActionId >= 0 && logicalActionId < 50;
+        // FUN_004ad570 defaults 104/105/109 to AT_SUBWEAPON (2).
+        // FUN_004d4130/4350/4570 route these to FUN_004d3850, which
+        // starts channel 0 then 1. Do not generalize to all attack IDs:
+        // ordinary forward shots retain their existing upper-channel path.
+        // TS_ActionType overrides and AT_SUBWEAPON2 remain separate work.
+        return (logicalActionId >= 0 && logicalActionId < 50) ||
+               logicalActionId == 104 || logicalActionId == 105 || logicalActionId == 109;
     }
 
     static bool HasScript(Func<int, bool> hasScript, int actionId)

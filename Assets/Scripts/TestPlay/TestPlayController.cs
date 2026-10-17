@@ -1,8 +1,8 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-public class TestPlayController : MonoBehaviour
+public partial class TestPlayController : MonoBehaviour
 {
     [Header("References")]
     public RoboStructure robo;
@@ -29,16 +29,19 @@ public class TestPlayController : MonoBehaviour
     public int SessionDefeatEffectSpawnCount { get; private set; }
     bool sessionReactionActive;
     int sessionReactionTicks;
+    bool sessionReactionScriptActive, sessionReactionBlockEntered;
     readonly List<TestPlayTargetSnapshot> sessionMeleeHits = new List<TestPlayTargetSnapshot>();
 
     internal TestPlayCombatHitResult ResolveSessionImpact(TestPlayCombatHitResult hit,
-        Vector3 attackerPosition, TestPlayTargetSnapshot snapshot, bool melee, int meleeHitStop)
+        Vector3 attackerPosition, TestPlayTargetSnapshot snapshot, bool melee, int meleeHitStop,
+        int reflectionRoll = 0)
     {
         Vector3 toAttacker = Vector3.ProjectOnPlane(attackerPosition - snapshot.Position, Vector3.up);
         Vector3 forward = Vector3.ProjectOnPlane(snapshot.Rotation * Vector3.forward, Vector3.up);
         var defense = TestPlayCombatCore.ResolveDefenseHit(new TestPlayDefenseHitInput {
             collisionKind = hit.collisionKind, attackFlag = hit.attackFlag,
             shieldGuardValue = shieldGuard, hitAcceptanceBlockTicks = state.GetInt(158),
+            reflectionProbabilityPercent = laserReflectValue, reflectionRoll = reflectionRoll,
             defenderForwardDotToAttacker = toAttacker.sqrMagnitude > 0.000001f && forward.sqrMagnitude > 0.000001f
                 ? Vector3.Dot(forward.normalized, toAttacker.normalized) : -1,
             sourceIsCharacter = melee, meleeHitStopTicks = meleeHitStop });
@@ -53,10 +56,34 @@ public class TestPlayController : MonoBehaviour
         state.SetInt(157, Mathf.Max(state.GetInt(157), hit.guardHitTimerTicks));
         hitStopTicks = Mathf.Max(hitStopTicks, hit.hitStopTicks);
         if (hit.hitStopTicks > 0) sessionAnimationHitStopped = true;
-        if (hit.decision != TestPlayCombatHitDecision.Damaged) return hit;
+        if (hit.decision != TestPlayCombatHitDecision.Damaged)
+        {
+            if ((hit.collisionKind == TestPlayAttackCollisionKind.OriginalType11 &&
+                 (hit.decision == TestPlayCombatHitDecision.Guarded || hit.decision == TestPlayCombatHitDecision.Reflected)) ||
+                (TestPlayCombatCore.IsOriginalCannon(hit.collisionKind) && hit.decision == TestPlayCombatHitDecision.Reflected))
+                SpawnType11DefenseFeedback(hit.decision, snapshot);
+            if (hit.decision == TestPlayCombatHitDecision.Guarded &&
+                (melee || hit.collisionKind == TestPlayAttackCollisionKind.OriginalType1 ||
+                 hit.collisionKind == TestPlayAttackCollisionKind.OriginalType6))
+            {
+                SpawnDefenseContact((snapshot.ShotCapsuleStart + snapshot.ShotCapsuleEnd) * .5f, melee);
+                EmitSessionHitSound(false);
+            }
+            return hit;
+        }
+        if (ResolveSupportDefense(ref hit, melee)) return hit;
         currentHP = Mathf.Max(0, currentHP - Mathf.Max(0, hit.damage));
-        SpawnSessionHitEffect(melee, attackerPosition, snapshot);
-        EmitSessionHitSound(melee);
+        bool bullet = hit.collisionKind == TestPlayAttackCollisionKind.OriginalType6 ||
+                      hit.collisionKind == TestPlayAttackCollisionKind.OriginalType11;
+        // Cannon contact owns its explosion at the projectile contact, including guard.
+        if (!TestPlayCombatCore.IsOriginalCannon(hit.collisionKind) && hit.collisionKind != TestPlayAttackCollisionKind.OriginalType31 &&
+            hit.collisionKind != TestPlayAttackCollisionKind.OriginalType29 && hit.collisionKind != TestPlayAttackCollisionKind.OriginalType32 &&
+            hit.collisionKind != TestPlayAttackCollisionKind.OriginalType33 &&
+            hit.collisionKind != TestPlayAttackCollisionKind.OriginalOrdnance && hit.collisionKind != TestPlayAttackCollisionKind.OriginalBlast)
+        {
+            SpawnSessionHitEffect(melee, attackerPosition, snapshot, bullet, hit.contactParameters);
+            if (!melee || hit.contactParameters == null || hit.contactParameters[9] == 0) EmitSessionHitSound(melee, bullet);
+        }
         LastSessionImpactForce = hit.impactForce;
         LastSessionDownValue = hit.down;
         LastSessionCollisionKind = hit.collisionKind;
@@ -83,8 +110,22 @@ public class TestPlayController : MonoBehaviour
         return hit;
     }
 
+    void SpawnType11DefenseFeedback(TestPlayCombatHitDecision decision, TestPlayTargetSnapshot snapshot)
+    {
+        if (presentationRuntime == null) return;
+        bool guard = decision == TestPlayCombatHitDecision.Guarded;
+        // FUN_00462af0 / FUN_004b27a0: original texture and guard sound slot.
+        // Capsule-center placement, quad composition and 20-tick visual lifetime are Unity adapters.
+        Vector3 center = (snapshot.ShotCapsuleStart + snapshot.ShotCapsuleEnd) * .5f;
+        var effect = presentationRuntime.CreateOriginalNamedTextureEffect(guard ? "summon.png" : "BlueBall.png",
+            center, Quaternion.identity, Vector2.one * .5f, 0f, Color.white);
+        if (effect != null) RegisterSessionCombatEffect(effect, 20, false);
+        if (guard) EmitSessionHitSound(false);
+    }
+
     void BeginSessionReaction(int reactionState, TestPlaySessionReactionDecision decision)
     {
+        if (decision.defeated && !SessionDefeated) sessionDefeatCameraTicks = 0;
         SessionDefeated = decision.defeated;
         if (sessionReactionActive && !SessionDefeated &&
             (SessionReactionPhase == TestPlaySessionReactionPhase.Knockback ||
@@ -98,6 +139,8 @@ public class TestPlayController : MonoBehaviour
         state.SetInt(156, SessionReactionState);
         sessionReactionActive = true;
         sessionReactionTicks = 0;
+        boostShotContinuation = null;
+        boostMotionActive = false;
         attackSequenceActive = false;
         landingSequenceActive = false;
         activeMeleeAttacks.Clear();
@@ -116,12 +159,17 @@ public class TestPlayController : MonoBehaviour
 
     bool EnterSessionReactionAction(int action)
     {
+        sessionReactionScriptActive = sessionReactionBlockEntered = false;
         var selection = ResolveActionSelection(action);
         bool hasPose = HasUsableAction(selection.poseActionId) &&
             robo.ani.animations[selection.poseActionId].frames?.Count > 0;
         if (hasPose)
         {
             ChangeAnimation(selection, true);
+            // 004d2030 / death entry 00437d80 starts the ANI's first block.
+            // Execute the authored camera reset, not an unconditional mode=0.
+            sessionReactionScriptActive = true;
+            TickSessionReactionScript(false);
             // Unity adapter: a hit must be visible before hit-stop freezes the
             // defender. The ordinary action blend otherwise holds the old idle
             // pose, and repeated hits keep restarting that blend.
@@ -132,17 +180,17 @@ public class TestPlayController : MonoBehaviour
         return hasPose;
     }
 
-    void EmitSessionHitSound(bool melee)
+    void EmitSessionHitSound(bool melee, bool bullet = false)
     {
         // Original resource IDs: 7 = BeamHit.wav, 11 = BeamHit2.wav.
         // Selecting these for accepted shot/melee damage is a Unity adapter.
-        string key = melee ? "11" : "7";
-        var args = new List<TestPlayScriptValue> { TestPlayScriptValue.Number(melee ? 11f : 7f) };
+        string key = bullet ? "15" : melee ? "11" : "7";
+        var args = new List<TestPlayScriptValue> { TestPlayScriptValue.Number(bullet ? 15f : melee ? 11f : 7f) };
         var sound = TestPlayPresentationCore.CreateSound(args, presentationRuntime != null
             ? presentationRuntime.ResolveAudioAdapter(TestPlayPresentationEventType.Sound, key)
             : TestPlayPresentationAdapterKind.None);
         sound.evidence = TestPlayPresentationEvidence.UnityAlternative;
-        sound.source = melee ? "SessionMeleeHit" : "SessionShotHit";
+        sound.source = bullet ? "SessionBulletHit" : melee ? "SessionMeleeHit" : "SessionShotHit";
         sound.diagnostic = "Unity adapter: accepted damage plays the mapped impact clip at the defender.";
         RaisePresentationEvent(sound);
         RaiseRuntimeEvent(TestPlayRuntimeEventType.Sound, "Snd", args, key);
@@ -151,6 +199,7 @@ public class TestPlayController : MonoBehaviour
     void TickSessionReactionPose()
     {
         if (sessionAnimationHitStopped || !sessionReactionActive) return;
+        TickSessionReactionScript(true);
         sessionReactionTicks++;
         actionTick++;
         int duration = GetSessionReactionPhaseDuration();
@@ -210,7 +259,16 @@ public class TestPlayController : MonoBehaviour
     void ApplySessionReactionMotion()
     {
         if (robo == null || robo.root == null) return;
-        IntegrateOriginalForceVelocity();
+        // Unity reaction adapter owns knockback velocity, gravity and landing.
+        // Evaluating reaction ANI for camera/presentation must not additionally
+        // integrate its Force/GvEnable/vF_Multi over that combat impulse. Retain
+        // the script values for evaluation, but preserve the accepted motion.
+        Vector3 scriptForce = forceCommand;
+        bool scriptGravity = gvEnable;
+        float scriptFriction = vFMulti;
+        forceCommand = Vector3.zero; gvEnable = true; vFMulti = 1f;
+        try { IntegrateOriginalForceVelocity(); }
+        finally { forceCommand = scriptForce; gvEnable = scriptGravity; vFMulti = scriptFriction; }
         Vector3 requestedMove = velocity * Mathf.Max(0f, aniUnitsToUnityScale);
         MoveRootWithColliderGrounding(robo.root.transform, requestedMove);
     }
@@ -222,6 +280,7 @@ public class TestPlayController : MonoBehaviour
         SetAirborneFlag(false);
         groundedFlag = true;
         sessionReactionTicks = 0;
+        SpawnDownContactSmoke();
         if (SessionDefeated)
         {
             SessionReactionPhase = TestPlaySessionReactionPhase.Defeated;
@@ -529,7 +588,7 @@ public class TestPlayController : MonoBehaviour
 
     [Header("Burner Preview")]
     public bool useConeBurnerEffects = true;
-    [Tooltip("原作テクスチャ登録表の burner.png をバーナー表示へ使用します。未登録時は従来の単色Coneへフォールバックします。")]
+    [Tooltip("原作テクスチャ登録表の burner.png をバーナー表示へ使用します。欠損時は診断して表示を省略します。")]
     public bool useOriginalBurnerTexture = true;
     [Tooltip("GUIDEテクスチャ表で burner.png に対応するScript Texture ID。")]
     public int originalBurnerTextureId = 8;
@@ -630,6 +689,20 @@ public class TestPlayController : MonoBehaviour
     float meleeTargetTurnDegrees;
     bool meleeSequenceHit;
     float camEffect;
+    public int CameraEffectMode => float.IsNaN(camEffect) || float.IsInfinity(camEffect)
+        ? 0 : unchecked((byte)(int)camEffect);
+    // Session time substitutes for the original application counter; never reset on a CamEffect command.
+    public int CameraEffectTick => session != null ? session.Tick : tick;
+    public Vector3 CameraEffectPivot
+    {
+        get
+        {
+            // 00437d30 + 00499d50: +DC0 is Body_d.x; +1C root matrix is represented
+            // by robo.root. Missing named bones use the root as an explicit Unity alternative.
+            Transform lowerBody = ResolveBodyAimRoot(bodyDownAimRoot, "Body_d.x");
+            return lowerBody != null ? lowerBody.position : robo.root.transform.position;
+        }
+    }
     float vFMulti = 1f;
     Vector3 moveCommand;
     float scriptedMoveRetention = 1f;
@@ -652,6 +725,19 @@ public class TestPlayController : MonoBehaviour
     bool previousAirborneFlag;
     bool boostFromRiseActive;
     bool boostMotionActive;
+    // FUN_004d2bd0/FUN_004e50c0 retain the boost callback for 106/107/108;
+    // rear shot 103 replaces it. Unity single-action adapter: suspend the
+    // locomotion ANI cursor and retain motion without replaying entry/cost.
+    sealed class BoostShotContinuation
+    {
+        public TestPlayActionSelection selection;
+        public int elapsed, scriptIndex, scriptTick, frameIndex, repeatInterval, repeatCounter;
+        public float frameTime, retention, multiplier;
+        public bool repeat, loop, held, locked, gravity;
+        public Vector3 move, force;
+        public Dictionary<int, float> burners;
+    }
+    BoostShotContinuation boostShotContinuation;
     bool moveAnimationActive;
     int actionTick;
     float stepMovedDistance;
@@ -684,8 +770,14 @@ public class TestPlayController : MonoBehaviour
         public TestPlayProjectilePayload payload;
         public WeaponPointInfo weaponPoint;
         public List<TestPlayScriptValue> args;
+        public bool bullet;
+        public TestPlayBeamParameters beam;
+        public TestPlayOrdnanceParameters ordnance;
+        public bool support;
     }
     readonly List<PendingType1Shot> pendingType1Shots = new List<PendingType1Shot>();
+    int type11ShotSequence;
+    readonly HashSet<string> procDiagnosticWarnings = new HashSet<string>();
     readonly List<ActiveSessionCombatEffect> activeSessionCombatEffects = new List<ActiveSessionCombatEffect>();
     readonly List<Renderer> sessionHiddenModelRenderers = new List<Renderer>();
     readonly List<bool> sessionHiddenModelRendererStates = new List<bool>();
@@ -729,6 +821,8 @@ public class TestPlayController : MonoBehaviour
     bool previousMeleeKeyHeld;
     bool shotKeyPressedThisTick;
     bool meleeKeyPressedThisTick;
+    readonly bool[] previousSpecialKeyHeld = new bool[3];
+    readonly bool[] specialKeyPressedThisTick = new bool[3];
     bool latchedRiseKeyPress;
     bool latchedShotKeyPress;
     bool latchedMeleeKeyPress;
@@ -748,7 +842,45 @@ public class TestPlayController : MonoBehaviour
     readonly OriginalAimState bodyDownAim = new OriginalAimState();
     readonly OriginalAimState arm1Aim = new OriginalAimState();
     readonly OriginalAimState arm2Aim = new OriginalAimState();
+    readonly Type6BurstAimPose[] type6BurstAimPoses = { new Type6BurstAimPose(), new Type6BurstAimPose() };
+    readonly WeaponPointInfo[] visibleAimPoints = new WeaponPointInfo[2];
+    readonly int[] visibleAimActions = { -1, -1 };
     float subLRKey;
+
+    sealed class Type6BurstAimPose
+    {
+        public Transform arm;
+        public int action = -1;
+        public bool holding;
+        public Transform[] parts;
+        public Quaternion[] rotations;
+        public Vector3[] positions, scales;
+        public void Clear() { arm = null; parts = null; rotations = null; positions = scales = null; holding = false; action = -1; }
+        public void Capture(Transform root, Transform limbRoot, int actionId, List<GameObject> modelParts)
+        {
+            arm = root; action = actionId;
+            var selected = new List<Transform>();
+            foreach (var part in modelParts)
+                if (part != null && (part.transform == limbRoot || part.transform.IsChildOf(limbRoot))) selected.Add(part.transform);
+            parts = selected.ToArray(); rotations = new Quaternion[parts.Length];
+            positions = new Vector3[parts.Length]; scales = new Vector3[parts.Length];
+            for (int i = 0; i < parts.Length; i++)
+            {
+                rotations[i] = parts[i].localRotation; positions[i] = parts[i].localPosition;
+                scales[i] = parts[i].localScale;
+            }
+        }
+        public void Restore()
+        {
+            if (parts == null) return;
+            for (int i = 0; i < parts.Length; i++)
+                if (parts[i] != null)
+                {
+                    parts[i].localRotation = rotations[i]; parts[i].localPosition = positions[i];
+                    parts[i].localScale = scales[i];
+                }
+        }
+    }
 
     sealed class OriginalAimState
     {
@@ -772,13 +904,19 @@ public class TestPlayController : MonoBehaviour
     float lastSyncedMovementEnergyFloat;
     int lastSyncedAuxiliaryEnergyInt;
     float lastSyncedAuxiliaryEnergyFloat;
+    short auxiliaryEnergyDeltaPerTick;
     readonly int[] attackCooldownTicks = new int[5];
+    // Unity HUD denominator: the last executed AttackDelay, never a fixed cooldown.
+    readonly int[] attackCooldownDurations = new int[5];
     readonly List<TestPlayMeleeAttackState> activeMeleeAttacks = new List<TestPlayMeleeAttackState>();
     readonly List<ActiveSwordBeam> activeSwordBeams = new List<ActiveSwordBeam>();
+    readonly List<ActiveWindLineEffect> activeWindLineEffects = new List<ActiveWindLineEffect>();
+    readonly List<ActiveWindRing2Effect> activeWindRing2Effects = new List<ActiveWindRing2Effect>();
     readonly List<ActiveThunderEffect> activeThunderEffects = new List<ActiveThunderEffect>();
     readonly List<ActiveWindRingSpecialEffect> activeWindRingSpecialEffects = new List<ActiveWindRingSpecialEffect>();
     readonly List<ActiveBurnerBurstEffect> activeBurnerBurstEffects = new List<ActiveBurnerBurstEffect>();
     readonly List<ActiveHinokoEffect> activeHinokoEffects = new List<ActiveHinokoEffect>();
+    readonly List<TestPlayTiri2Effect> activeTiri2Effects = new List<TestPlayTiri2Effect>();
     readonly List<ActiveMagicShieldEffect> activeMagicShieldEffects = new List<ActiveMagicShieldEffect>();
     ActiveSwordBeam managedSwordBeam;
     bool attackSequenceActive;
@@ -806,6 +944,24 @@ public class TestPlayController : MonoBehaviour
         public TestPlaySwordBeamEffect visual;
         public float currentLength;
         public int remainingTicks;
+    }
+
+    sealed class ActiveWindLineEffect
+    {
+        public GameObject visualRoot;
+        public TestPlayWindEffect visual;
+        public Vector3 movementPerTick;
+        public TestPlayWindLineState state;
+    }
+
+    sealed class ActiveWindRing2Effect
+    {
+        public TestPlayWindRing2State state;
+        public GameObject visualRoot;
+        public TestPlayOriginalEffect originalVisual;
+        public TestPlayWindEffect fallbackVisual;
+        public bool mappedPrefab;
+        public Vector3 mappedBaseScale;
     }
 
     sealed class ActiveThunderEffect
@@ -937,8 +1093,18 @@ public class TestPlayController : MonoBehaviour
         BeginCombatTraceTick();
         BeginPresentationTraceTick();
         groundRecoveryCompletedThisTick = false;
+        // Independent particles continue through owner hit-stop/reaction.
+        TickActiveWindLineEffects();
+        TickActiveWindRing2Effects();
+        TickActiveTiri2Effects();
+        TickActionEffects();
+        TickMovementParticles();
+        if (cameraController != null && cameraController.controller == this) cameraController.TickOriginalDistanceShake();
         TickSessionCombatEffects();
         bool animationHitStopped = session != null ? sessionAnimationHitStopped : UpdateOriginalCombatTimers();
+        // The shared 60 Hz clock also advances reloads during damage reactions.
+        if (currentHP > 0f && !SessionDefeated)
+            UpdateOriginalAttackCooldowns();
         if (session != null && (currentHP <= 0 || sessionReactionActive || SessionDefeated))
         {
             if (currentHP <= 0 && !SessionDefeated)
@@ -953,6 +1119,11 @@ public class TestPlayController : MonoBehaviour
                     });
                 BeginSessionReaction(3, defeat);
             }
+            if (currentHP > 0f && !SessionDefeated)
+            {
+                UpdateOriginalAuxiliaryEnergy();
+                if (!animationHitStopped) RecoverOriginalActionEnergy();
+            }
             TickSessionReactionPose();
             ConsumeLatchedInput();
             simulatingCombatTick = simulatingPresentationTick = false;
@@ -960,7 +1131,6 @@ public class TestPlayController : MonoBehaviour
         }
         if (session != null)
             SessionAccumulatedDown = TestPlayCombatCore.TickAccumulatedDown(SessionAccumulatedDown);
-        UpdateOriginalAttackCooldowns();
         UpdateInputState();
         UpdateTargetLock();
         UpdateTargetState();
@@ -973,6 +1143,8 @@ public class TestPlayController : MonoBehaviour
             // Spawned hit volumes keep their own lifetime/target interval clock.
             TickActiveMeleeAttacks();
             TickActiveSwordBeams();
+            TickSwordBeamPresentation();
+            UpdateOriginalAuxiliaryEnergy();
             ConsumeLatchedInput();
             simulatingCombatTick = simulatingPresentationTick = false;
             return;
@@ -990,8 +1162,12 @@ public class TestPlayController : MonoBehaviour
         TickActiveMagicShieldEffects();
         if (hitStopTicks <= 0)
             ApplyRootMotion();
+        EmitMovementPresentation();
         ApplyQueuedAimCommands();
+        TickSwordBeamPresentation();
         FlushPendingType1Shots();
+        UpdateOriginalAuxiliaryEnergy();
+        RecoverOriginalActionEnergy();
         ConsumeLatchedInput();
         simulatingCombatTick = false;
         simulatingPresentationTick = false;
@@ -1035,6 +1211,7 @@ public class TestPlayController : MonoBehaviour
         if (presentationRuntime == null)
             presentationRuntime = gameObject.AddComponent<TestPlayPresentationRuntime>();
         CopyPresentationTemplate(explicitContext != null ? explicitContext.PresentationTemplate : null);
+        if (Application.isPlaying && presentationRuntime != null) presentationRuntime.LoadExternalResources();
         presentationRuntime.PreloadMappedAudioAssets();
         presentationRuntime.Bind(this);
         presentationRuntime.AttachEmitters(robo != null && robo.root != null ? robo.root.transform : null);
@@ -1141,6 +1318,7 @@ public class TestPlayController : MonoBehaviour
         activeMeleeAttacks.Clear();
         pendingType1Shots.Clear();
         DestroyTransientObjects();
+        presentationRuntime?.ReleaseExternalResources();
         RestoreSessionModelVisibility();
     }
 
@@ -1257,7 +1435,9 @@ public class TestPlayController : MonoBehaviour
             ResetStepRuntimeState();
         }
 
-        if (logicalActionId != boostAction || !boostMotionActive)
+        if (logicalActionId != boostShotAction)
+            boostShotContinuation = null;
+        if ((logicalActionId != boostAction && boostShotContinuation == null) || !boostMotionActive)
             boostMotionActive = false;
 
         if (!landingSequenceActive && (logicalActionId == riseStartAction || logicalActionId == riseAction || (logicalActionId == boostAction && boostMotionActive)))
@@ -1283,6 +1463,7 @@ public class TestPlayController : MonoBehaviour
 
     void TickAnimation()
     {
+        if (boostShotContinuation != null) boostShotContinuation.elapsed++;
         if (currentAnimation == null)
             ChangeAnimation(idleAction);
         if (currentAnimation == null)
@@ -1312,24 +1493,7 @@ public class TestPlayController : MonoBehaviour
                 return;
             }
 
-            bool enteringBlock = scriptTick == 0;
-            if (enteringBlock)
-            {
-                ResetOriginalBlockState();
-                ResetScriptRepeatState();
-            }
-
-            bool executeBlock = enteringBlock || ConsumeScriptRepeatTick();
-            if (executeBlock)
-            {
-                int actionBeforeScript = currentAnimationIndex;
-                int scriptBeforeExecution = scriptIndex;
-                burnerRequestedOutputs.Clear();
-                bool interrupted = ExecuteCurrentAnimationScript(currentScript.squirrel);
-                ApplyBurners();
-                if (interrupted || currentAnimationIndex != actionBeforeScript || scriptIndex != scriptBeforeExecution)
-                    return;
-            }
+            if (!ExecuteTimedAnimationBlock(currentScript, scriptTick == 0)) return;
 
             int length = GetRuntimeScriptLengthTicks(currentScript);
             scriptTick++;
@@ -1381,6 +1545,49 @@ public class TestPlayController : MonoBehaviour
         ApplyPose();
     }
 
+    bool ExecuteTimedAnimationBlock(script block, bool enteringBlock, bool allowRepeat = true)
+    {
+        if (enteringBlock)
+        {
+            ResetOriginalBlockState();
+            ResetScriptRepeatState();
+        }
+        if (enteringBlock || (allowRepeat && ConsumeScriptRepeatTick()))
+        {
+            int actionBefore = currentAnimationIndex, blockBefore = scriptIndex;
+            burnerRequestedOutputs.Clear();
+            bool interrupted = ExecuteCurrentAnimationScript(block.squirrel);
+            ApplyBurners();
+            if (interrupted || currentAnimationIndex != actionBefore || scriptIndex != blockBefore) return false;
+        }
+        return true;
+    }
+
+    void TickSessionReactionScript(bool advanceTick)
+    {
+        // Reuse VM, channel selection, block lengths and repeat semantics. The
+        // session still owns reaction duration/pose/landing: an ANI terminator
+        // must not return a dead mech to idle or end the combat reaction early.
+        var blocks = sessionReactionScriptActive ? currentScriptAnimation?.scripts : null;
+        if (blocks == null || scriptIndex < 0 || scriptIndex >= blocks.Count) return;
+        var block = blocks[scriptIndex];
+        if (IsScriptTerminator(block)) return;
+        bool entering = !sessionReactionBlockEntered;
+        if (!ExecuteTimedAnimationBlock(block, entering, advanceTick && scriptTick > 0))
+        {
+            sessionReactionBlockEntered = false;
+            return;
+        }
+        sessionReactionBlockEntered = true;
+        if (advanceTick && ++scriptTick >= GetRuntimeScriptLengthTicks(block))
+        {
+            scriptTick = 0;
+            scriptIndex++;
+            sessionReactionBlockEntered = false;
+            ResetScriptRepeatState();
+        }
+    }
+
     bool ConsumeScriptRepeatTick()
     {
         if (!executeScriptRepeatedly)
@@ -1405,6 +1612,10 @@ public class TestPlayController : MonoBehaviour
 
     void ResetOriginalBlockState()
     {
+        // FUN_004b8250 clears +0xB6C only on main-channel block entry.
+        if (TestPlayActionCore.UsesOriginalDualAniChannels(currentAnimationIndex) ||
+            IsMeleeAttackAction(currentAnimationIndex))
+            auxiliaryEnergyDeltaPerTick = 0;
         // Original numeric Move=0 preserves the current Move component. Keep
         // the dedicated ANI Move state across block/action entry; only STOP or
         // a new numeric Move command changes it.
@@ -1414,7 +1625,7 @@ public class TestPlayController : MonoBehaviour
         laserReflectValue = 0;
         gvEnable = true;
         attackFlag = 0;
-        camEffect = 0f;
+        // 004b8250 does not clear CamEffect (+B85) on block entry.
         vFMulti = 1f;
         if (IsMeleeAttackAction(currentAnimationIndex))
         {
@@ -1426,9 +1637,8 @@ public class TestPlayController : MonoBehaviour
         }
         EnsureAttackProfile();
         // FUN_004b8250 resets block flags, but not AttackPow/DownF/Force.
-        // Later melee blocks commonly spawn type57 without repeating ATTACK.
-        if (!IsMeleeAttackAction(currentAnimationIndex))
-            attackProfile.Reset();
+        // Both melee and shooting bursts use later blocks without repeating ATTACK.
+        // ResetRuntimeFlags owns initialization; block entry must retain the profile.
         burnerRequestedOutputs.Clear();
         // FUN_004b8250 preserves joint aim flags/limits across blocks.
         shotTurnAng = 0f;
@@ -1560,6 +1770,26 @@ public class TestPlayController : MonoBehaviour
     }
 
     void ApplyRootMotion()
+    {
+        var continuation = boostShotContinuation;
+        if (continuation == null) { ApplyCurrentRootMotion(); return; }
+        // Keep the lower-channel Move/Force separate from the shot script.
+        Vector3 shotMove = moveCommand, shotForce = forceCommand;
+        bool shotLocked = moveLocked, shotGravity = gvEnable;
+        float shotRetention = scriptedMoveRetention, shotMultiplier = vFMulti;
+        moveCommand = continuation.move; forceCommand = continuation.force;
+        moveLocked = continuation.locked; gvEnable = continuation.gravity;
+        scriptedMoveRetention = continuation.retention; vFMulti = continuation.multiplier;
+        try { ApplyCurrentRootMotion(); continuation.move = moveCommand; }
+        finally
+        {
+            moveCommand = shotMove; forceCommand = shotForce;
+            moveLocked = shotLocked; gvEnable = shotGravity;
+            scriptedMoveRetention = shotRetention; vFMulti = shotMultiplier;
+        }
+    }
+
+    void ApplyCurrentRootMotion()
     {
         if (robo == null || robo.root == null)
             return;
@@ -1950,6 +2180,12 @@ public class TestPlayController : MonoBehaviour
         state.SetInt(196, sampledSpecial1KeyHeld || latchedSpecial1KeyPress ? 1 : 0);
         state.SetInt(197, sampledSpecial2KeyHeld || latchedSpecial2KeyPress ? 1 : 0);
         state.SetInt(198, sampledSpecial3KeyHeld || latchedSpecial3KeyPress ? 1 : 0);
+        for (int i = 0; i < 3; i++)
+        {
+            bool held = state.GetInt(196 + i) != 0;
+            specialKeyPressedThisTick[i] = held && !previousSpecialKeyHeld[i];
+            previousSpecialKeyHeld[i] = held;
+        }
         state.SetInt(199, riseKeyHeld ? 1 : 0);
     }
 
@@ -2012,6 +2248,8 @@ public class TestPlayController : MonoBehaviour
         previousMeleeKeyHeld = false;
         shotKeyPressedThisTick = false;
         meleeKeyPressedThisTick = false;
+        Array.Clear(previousSpecialKeyHeld, 0, previousSpecialKeyHeld.Length);
+        Array.Clear(specialKeyPressedThisTick, 0, specialKeyPressedThisTick.Length);
         previousLockKeyHeld = false;
         ConsumeLatchedInput();
     }
@@ -2136,6 +2374,15 @@ public class TestPlayController : MonoBehaviour
 
     void UpdateActionFromInput()
     {
+        // FUN_004de120: exhaustion ends boost immediately; release waits for
+        // the secondary shot channel to finish.
+        if (boostShotContinuation != null && !HasMovementEnergy())
+        {
+            boostShotContinuation = null;
+            attackSequenceActive = false;
+            ChangeToAirMoveOrLanding();
+            return;
+        }
         if (ShouldForceAirborneByAction())
             SetAirborneFlag(true);
 
@@ -2254,9 +2501,11 @@ public class TestPlayController : MonoBehaviour
 
     int GetOneShotActionFromInput()
     {
-        if (state.GetInt(196) != 0) return special1Action;
-        if (state.GetInt(197) != 0) return special2Action;
-        if (state.GetInt(198) != 0) return special3Action;
+        // Original FUN_004d4130 / 4350 / 4570: press edges and independent
+        // AttackDelay slots 2 / 3 / 4. Keep @int[196..198] as held input for ANI.
+        if (specialKeyPressedThisTick[0] && attackCooldownTicks[2] <= 0) return special1Action;
+        if (specialKeyPressedThisTick[1] && attackCooldownTicks[3] <= 0) return special2Action;
+        if (specialKeyPressedThisTick[2] && attackCooldownTicks[4] <= 0) return special3Action;
         if (shotKeyPressedThisTick && attackCooldownTicks[0] <= 0) return ResolveShotInputAction();
         if (meleeKeyPressedThisTick && attackCooldownTicks[1] <= 0)
             return ResolveMeleeInputAction(state != null ? state.GetInt(190) : 0);
@@ -2382,6 +2631,18 @@ public class TestPlayController : MonoBehaviour
 
     void StartNormalAttackAction(int actionId)
     {
+        boostShotContinuation = IsCurrentAction(boostAction) && boostMotionActive &&
+            (actionId == boostShotAction || actionId == 107 || actionId == 108)
+            ? new BoostShotContinuation {
+                selection = currentActionSelection, elapsed = actionTick,
+                scriptIndex = scriptIndex, scriptTick = scriptTick,
+                frameIndex = frameIndex, frameTime = frameTime,
+                repeat = executeScriptRepeatedly, repeatInterval = scriptRepeatInterval,
+                repeatCounter = scriptRepeatCounter, loop = animeLoop, held = animationPoseHeldAtEnd,
+                move = moveCommand, force = forceCommand, locked = moveLocked,
+                gravity = gvEnable, retention = scriptedMoveRetention, multiplier = vFMulti,
+                burners = new Dictionary<int, float>(burnerRequestedOutputs)
+            } : null;
         meleeSequenceHit = false;
         bool startsAttack = IsShotAttackAction(actionId) ||
                             IsMeleeAttackAction(actionId);
@@ -2469,6 +2730,34 @@ public class TestPlayController : MonoBehaviour
 
     void FinishNormalAttackSequence()
     {
+        if (boostShotContinuation != null)
+        {
+            var continuation = boostShotContinuation;
+            boostShotContinuation = null;
+            attackSequenceActive = meleeApproachActive = meleeComboInputPending = false;
+            groundedStationaryShotRecoveryPresentationRequested = false;
+            swordCancelAction = -1;
+            actionTick = continuation.elapsed;
+            if (!ShouldEndOriginalStyleBoost())
+            {
+                RecordCombatTransition(boostAction, TestPlayCombatDecisionReason.AttackFinished);
+                ChangeAnimation(continuation.selection, true);
+                ResetOriginalBlockState();
+                actionTick = continuation.elapsed;
+                scriptIndex = continuation.scriptIndex; scriptTick = continuation.scriptTick;
+                frameIndex = continuation.frameIndex; frameTime = continuation.frameTime;
+                executeScriptRepeatedly = continuation.repeat;
+                scriptRepeatInterval = continuation.repeatInterval;
+                scriptRepeatCounter = continuation.repeatCounter;
+                animeLoop = continuation.loop; animationPoseHeldAtEnd = continuation.held;
+                moveCommand = continuation.move; forceCommand = continuation.force;
+                moveLocked = continuation.locked; gvEnable = continuation.gravity;
+                scriptedMoveRetention = continuation.retention; vFMulti = continuation.multiplier;
+                foreach (var burner in continuation.burners)
+                    burnerRequestedOutputs[burner.Key] = burner.Value;
+                return;
+            }
+        }
         bool presentStandingRecovery = groundedStationaryShotRecoveryPresentationRequested &&
             !airborneFlag && currentActionSelection.logicalActionId == shotAction;
         groundedStationaryShotRecoveryPresentationRequested = false;
@@ -2624,7 +2913,7 @@ public class TestPlayController : MonoBehaviour
             delta = -Mathf.Max(0f, stepEnergyPerTick);
         else if (IsCurrentAction(riseAction) && riseSequenceActive)
             delta = -Mathf.Max(0f, riseEnergyPerTick);
-        else if (IsCurrentAction(boostAction) && boostMotionActive)
+        else if ((IsCurrentAction(boostAction) || boostShotContinuation != null) && boostMotionActive)
             delta = -Mathf.Max(0f, boostEnergyPerTick);
         else if (!airborneFlag)
             // Character initialization sets +0xD24 to 24 independently from
@@ -2666,6 +2955,42 @@ public class TestPlayController : MonoBehaviour
             // both aliases were changed during the same Script.ani block.
             SetMovementEnergy(originalIntChanged ? intValue : floatValue);
         }
+    }
+
+    void RecoverOriginalActionEnergy()
+    {
+        // Original action handlers call FUN_00476f40 independently of AddEnergy.
+        // Base rates: idle 004d4f60=4, walk 004d5420=2, landing 004d6f10/
+        // 004d7520=3; rise/air/step/shot/approach/boost=1. Regular melee has
+        // no such call. Logical IDs also cover sword locomotion poses 50..99.
+        // Original +0x244 equipment bonuses and allied supply are not yet modeled.
+        int action = GetLogicalActionId(currentAnimationIndex);
+        float amount = 0f;
+        if (action == idleAction) amount = 4f;
+        else if (action == moveAction) amount = 2f;
+        else if (action == landingAction || action == stepLandingAction || action == 16) amount = 3f;
+        else if (action == 13 || action == 14 || action == 15 || action == 17) amount = 2f;
+        else if (action == riseStartAction || action == riseAction || action == airMoveAction ||
+                 action == airIdleAction || IsStepAction(currentAnimationIndex) ||
+                 action == boostAction || action == 23 || IsShotAttackAction(currentAnimationIndex) ||
+                 (action == meleeAction && meleeApproachActive)) amount = 1f;
+        if (amount > 0f)
+        {
+            ReconcileAuxiliaryEnergyState();
+            SetAuxiliaryEnergy(currentAuxiliaryEnergy + amount);
+        }
+    }
+
+    void UpdateOriginalAuxiliaryEnergy()
+    {
+        ReconcileAuxiliaryEnergyState();
+        // Original high confidence: Scr_AddEnergy writes a signed short at
+        // script-context +0xD0 (character +0xB6C). The character tick adds it
+        // to float +0xD28 after script execution, including animation hit-stop.
+        // Keep the existing Unity resource aliases; the lower clamp is a
+        // Unity safety boundary (the original tick only clamps the maximum).
+        if (auxiliaryEnergyDeltaPerTick != 0)
+            SetAuxiliaryEnergy(currentAuxiliaryEnergy + auxiliaryEnergyDeltaPerTick);
     }
 
     void SetAuxiliaryEnergy(float value)
@@ -2723,7 +3048,7 @@ public class TestPlayController : MonoBehaviour
     {
         if (sessionReactionActive && velocity.y > 0f)
             return true;
-        if (IsCurrentAction(boostAction) && boostMotionActive)
+        if ((IsCurrentAction(boostAction) || boostShotContinuation != null) && boostMotionActive)
             return true;
         if ((IsCurrentAction(riseStartAction) || IsCurrentAction(riseAction)) && riseSequenceActive)
             return true;
@@ -2876,6 +3201,7 @@ public class TestPlayController : MonoBehaviour
             LogUnhandled("AttackDelay slot out of original range 0..4: " + slot);
             return;
         }
+        attackCooldownDurations[slot] = Mathf.Max(0, cooldownTicks);
         RecordCombatEvent(new TestPlayCombatTraceEvent
         {
             type = TestPlayCombatTraceEventType.CooldownSet,
@@ -2889,6 +3215,20 @@ public class TestPlayController : MonoBehaviour
     public int GetAttackCooldownTicks(int slot)
     {
         return TestPlayCombatCore.GetCooldown(attackCooldownTicks, slot);
+    }
+
+    public bool HasSpecialAttack(int index)
+    {
+        return index >= 0 && index < 3 && HasUsableAction(
+            index == 0 ? special1Action : index == 1 ? special2Action : special3Action);
+    }
+
+    public float GetSpecialAttackRecovery(int index)
+    {
+        if (index < 0 || index >= 3) return 0f;
+        int slot = index + 2;
+        int duration = attackCooldownDurations[slot];
+        return duration <= 0 ? 1f : Mathf.Clamp01(1f - (float)attackCooldownTicks[slot] / duration);
     }
 
     void ChangeToAirMoveOrLanding()
@@ -3004,6 +3344,7 @@ public class TestPlayController : MonoBehaviour
 
     void StartLandingSequence()
     {
+        if (!landingSequenceActive) EmitLandingSmoke();
         StartGroundRecoverySequence(landingAction);
     }
 
@@ -3190,7 +3531,7 @@ public class TestPlayController : MonoBehaviour
     bool TryGetOriginalStyleBoostWorldMove(Transform root, Vector3 scriptedLocalMove, out Vector3 worldMove)
     {
         worldMove = Vector3.zero;
-        if (root == null || !IsCurrentAction(boostAction) || !boostMotionActive)
+        if (root == null || (!IsCurrentAction(boostAction) && boostShotContinuation == null) || !boostMotionActive)
             return false;
 
         if (!TryGetBoostReferenceBasis(root, out Vector3 referenceForward, out Vector3 referenceRight))
@@ -3210,7 +3551,7 @@ public class TestPlayController : MonoBehaviour
         if (desiredHeading.sqrMagnitude > 0.000001f)
         {
             float turnDegrees;
-            if (actionTick < 10)
+            if ((boostShotContinuation?.elapsed ?? actionTick) < 10)
             {
                 turnDegrees = Mathf.Max(0f, boostInitialTurnDegreesPerTick);
             }
@@ -3639,6 +3980,17 @@ public class TestPlayController : MonoBehaviour
     }
 
     public TestPlayActionSelection CurrentActionSelection => currentActionSelection;
+
+    // C2 observation adapter: derive D58 categories from executing state, never
+    // confuse reaction-only state[156] with the full original behavior category.
+    internal int CpuBehavior => SessionDefeated ? 6 : sessionReactionActive
+        ? (SessionReactionPhase == TestPlaySessionReactionPhase.Downed ? 6 : 3)
+        : stepSequenceActive ? 1 : boostMotionActive ? 7 : landingSequenceActive ? 2
+        : meleeApproachActive ? 8 : attackSequenceActive
+        ? (IsMeleeAttackAction(CurrentActionSelection.logicalActionId) ? 5 : 12)
+        : IsCurrentAction(guardAction) ? 4 : airborneFlag ? 10 : moveAnimationActive ? 9 : 0;
+    internal int CpuAttackKind => !attackSequenceActive ? 0 : CurrentActionSelection.UsesDualChannels ? 1 : 2;
+    internal bool CpuMeleeSequenceHit => meleeSequenceHit;
     public TestPlayMotionStep LastMotionStep => lastMotionStep;
     public int CurrentLaserReflectValue => laserReflectValue;
     public TestPlayLocomotionState CurrentLocomotionState =>
@@ -4098,14 +4450,23 @@ public class TestPlayController : MonoBehaviour
 
     void HandleCommand(string name, List<TestPlayScriptValue> args, string rawLine)
     {
-        if (session != null && (SessionDefeated || currentHP <= 0)) return;
+        string key = NormalizeName(name);
+        // Dead owners still evaluate camera/block-control commands in reaction
+        // ANI. Preserve the existing prohibition on firing attacks after death.
+        if (session != null && (SessionDefeated || currentHP <= 0) &&
+            key != "cameffect" && key != "execscripteverytime" &&
+            key != "changescript" && key != "goscriptindex" && key != "goposeindex") return;
         if (logCommands)
             Debug.Log($"[TestPlayCommand] A{currentAnimationIndex} S{scriptIndex}: {rawLine.Trim()}");
 
-        string key = NormalizeName(name);
         RaiseRuntimeEvent(TestPlayRuntimeEventType.Command, name, args);
         switch (key)
         {
+            case "setextparam":
+                // 004b76e0: ten integer values, snapshotted by type57 constructor.
+                for (int i = 0; i < contactParameters.Length; i++)
+                    contactParameters[i] = i < args.Count ? args[i].AsInt() : 0;
+                break;
             case "move":
                 SetMoveVector(ref moveCommand, args);
                 LogMotionAssignment("Move", rawLine);
@@ -4199,7 +4560,7 @@ public class TestPlayController : MonoBehaviour
                 scriptRepeatCounter = scriptRepeatInterval;
                 executeScriptRepeatedly = true;
                 break;
-            case "addenergy": if (args.Count > 0) SetMovementEnergy(currentEnergy + args[0].AsFloat()); break;
+            case "addenergy": if (args.Count > 0) auxiliaryEnergyDeltaPerTick = unchecked((short)args[0].AsInt()); break;
             case "addexgauge": if (args.Count > 0) state.SetInt(155, state.GetInt(155) + args[0].AsInt()); break;
             case "catchlastchara":
             case "catchchara":
@@ -4301,7 +4662,13 @@ public class TestPlayController : MonoBehaviour
     {
         Transform locked = GetLockedTargetTransform();
         Transform root = robo != null && robo.root != null ? robo.root.transform : transform;
-        Vector3 direction = locked != null ? locked.position - root.position : root.forward;
+        Vector3 aimTargetPosition = locked != null
+            ? ResolveLockedAimTargetPosition(locked)
+            : root.position + root.forward;
+        Vector3 aimOriginPosition = ResolveJointAimOriginPosition(root);
+        Vector3 direction = locked != null
+            ? aimTargetPosition - aimOriginPosition
+            : root.forward;
         Vector3 horizontal = Vector3.ProjectOnPlane(direction, Vector3.up);
         // Original target-relative right axis (+0xA70), not each body's local X.
         Vector3 right = horizontal.sqrMagnitude > 0.000001f
@@ -4311,8 +4678,129 @@ public class TestPlayController : MonoBehaviour
             bodyDownAim, bodyDownAimRequested, pitch, right, 0f);
         ApplyBodyAim(ResolveBodyAimRoot(bodyUpAimRoot, "Body.x"),
             bodyUpAim, bodyUpAimRequested, pitch, right, lower);
-        ApplyArmAim(ResolveArmAimRoot(0, arm1AimRoot), arm1Aim, arm1AimRequested, locked, direction);
-        ApplyArmAim(ResolveArmAimRoot(1, arm2AimRoot), arm2Aim, arm2AimRequested, locked, direction);
+        ApplyArmAimWithType6BurstPose(0, ResolveArmAimRoot(0, arm1AimRoot), arm1Aim,
+            arm1AimRequested, locked, aimTargetPosition, direction);
+        ApplyArmAimWithType6BurstPose(1, ResolveArmAimRoot(1, arm2AimRoot), arm2Aim,
+            arm2AimRequested, locked, aimTargetPosition, direction);
+        AlignVisibleFiringArm(0, ResolveArmAimRoot(0, arm1AimRoot), arm1AimRequested, locked, aimTargetPosition);
+        AlignVisibleFiringArm(1, ResolveArmAimRoot(1, arm2AimRoot), arm2AimRequested, locked, aimTargetPosition);
+    }
+
+    void AlignVisibleFiringArm(int armId, Transform arm, bool requested, Transform locked, Vector3 targetPosition)
+    {
+        if (!requested || locked == null || arm == null || visibleAimActions[armId] != currentAnimationIndex)
+            visibleAimPoints[armId] = null;
+        if (!requested || locked == null || arm == null) return;
+        foreach (var pending in pendingType1Shots)
+        {
+            if ((pending.payload.collisionKind == TestPlayAttackCollisionKind.OriginalType1 ||
+                 pending.payload.collisionKind == TestPlayAttackCollisionKind.OriginalType6) &&
+                pending.weaponPoint?.BoneTr != null && pending.weaponPoint.BoneTr.IsChildOf(arm))
+            {
+                visibleAimPoints[armId] = pending.weaponPoint;
+                visibleAimActions[armId] = currentAnimationIndex;
+                break;
+            }
+        }
+        var point = visibleAimPoints[armId];
+        if (point?.BoneTr == null || !point.BoneTr.IsChildOf(arm)) return;
+        Vector3 direction = targetPosition - point.BoneTr.position;
+        if (direction.sqrMagnitude < .000001f ||
+            Vector3.Angle(point.WorldForward, direction) >= TestPlayCombatCore.OriginalType1InitialAimConeDegrees) return;
+
+        // Unity visual adapter: FUN_004e8310's in-cone launch correction remains
+        // in CombatCore. Apply its small residual to the visible firing limb
+        // first, so the projectile cannot leave sideways from the gun. Reapply
+        // after the ANI pose throughout this firing action (also between shots).
+        // Preserve the original joint solver, out-of-cone limits, WP local axes,
+        // and deliberately scattered attacks. Pivot motion requires iteration.
+        Quaternion before = arm.rotation;
+        for (int i = 0; i < 8; i++)
+        {
+            direction = targetPosition - point.BoneTr.position;
+            if (direction.sqrMagnitude < .000001f) { arm.rotation = before; return; }
+            if (Vector3.Angle(point.WorldForward, direction) < .01f) return;
+            arm.rotation = Quaternion.FromToRotation(point.WorldForward, direction) * arm.rotation;
+            if (Quaternion.Angle(before, arm.rotation) > TestPlayCombatCore.OriginalType1InitialAimConeDegrees)
+            { arm.rotation = before; return; }
+        }
+    }
+
+    Vector3 ResolveLockedAimTargetPosition(Transform locked)
+    {
+        if (locked == null)
+            return Vector3.zero;
+        if (session != null && session.TryGet(sessionLock, out var snapshot))
+        {
+            // Unity adapter: the session proxy remains at the movement root, so
+            // joint elevation aims at the frozen CharacterController centre.
+            // The original LockBody/LockArm solver and its limits stay unchanged.
+            return (snapshot.ShotCapsuleStart + snapshot.ShotCapsuleEnd) * 0.5f;
+        }
+        return locked.position;
+    }
+
+    Vector3 ResolveJointAimOriginPosition(Transform root)
+    {
+        if (session != null && session.TryGet(sessionMech, out var snapshot))
+            return (snapshot.ShotCapsuleStart + snapshot.ShotCapsuleEnd) * 0.5f;
+        return root != null ? root.position : transform.position;
+    }
+
+    void ApplyArmAimWithType6BurstPose(int armId, Transform arm, OriginalAimState aim,
+        bool enabled, Transform locked, Vector3 targetPosition, Vector3 direction)
+    {
+        var saved = type6BurstAimPoses[armId];
+        if (saved.arm != arm || saved.action != currentAnimationIndex || !enabled || locked == null)
+            saved.Clear();
+        PendingType1Shot bullet = null;
+        if (arm != null && locked != null && enabled)
+            foreach (var pending in pendingType1Shots)
+                if (pending.bullet && pending.weaponPoint?.BoneTr != null &&
+                    pending.weaponPoint.BoneTr.IsChildOf(arm)) { bullet = pending; break; }
+        if (saved.holding) saved.Restore();
+        // ATTACKARM may be a rotation pivot below the upper arm. Include its
+        // whole limb branch, but never the torso or the locomotion hierarchy.
+        Transform limbRoot = arm;
+        Transform torso = ResolveBodyAimRoot(bodyUpAimRoot, "Body.x");
+        if (arm != null && torso != null && arm != torso && arm.IsChildOf(torso))
+            while (limbRoot.parent != torso) limbRoot = limbRoot.parent;
+        Type6BurstAimPose candidate = null;
+        if (bullet != null && !saved.holding)
+        {
+            candidate = new Type6BurstAimPose();
+            candidate.Capture(arm, limbRoot, currentAnimationIndex, robo.parts);
+        }
+        float weight = aim.weight;
+        ApplyArmAim(arm, aim, enabled, locked != null, targetPosition, direction);
+        if (bullet == null) return;
+        float error = Vector3.Angle(bullet.weaponPoint.WorldForward, targetPosition - bullet.weaponPoint.BoneTr.position);
+        if (error < TestPlayCombatCore.OriginalType1InitialAimConeDegrees)
+        {
+            if (candidate != null) type6BurstAimPoses[armId] = candidate;
+            return;
+        }
+        if (saved.parts == null || saved.holding) return;
+
+        // Unity adapter, 2026-09-27 user observation: every round of the original
+        // burst stays aimed. Current whole-body ANI playback can lower the arm
+        // before later type6 commands. Restore the last valid raw firing-limb
+        // pose, then apply the normal joint solver once (not an unlimited bullet
+        // snap). Do not key this repair on a mech name, animation ID or part name.
+        var originalPose = new Type6BurstAimPose();
+        originalPose.Capture(arm, limbRoot, currentAnimationIndex, robo.parts);
+        Quaternion originalAim = aim.rotation;
+        float originalWeight = aim.weight;
+        saved.Restore(); aim.weight = weight;
+        ApplyArmAim(arm, aim, enabled, locked != null, targetPosition, direction);
+        float repairedError = Vector3.Angle(bullet.weaponPoint.WorldForward,
+            targetPosition - bullet.weaponPoint.BoneTr.position);
+        if (repairedError < TestPlayCombatCore.OriginalType1InitialAimConeDegrees)
+            saved.holding = true;
+        else
+        {
+            originalPose.Restore(); aim.rotation = originalAim; aim.weight = originalWeight;
+        }
     }
 
     Transform ResolveBodyAimRoot(Transform inspectorOverride, string originalName)
@@ -4350,7 +4838,7 @@ public class TestPlayController : MonoBehaviour
     }
 
     static void ApplyArmAim(Transform arm, OriginalAimState aim, bool enabled,
-        Transform locked, Vector3 fallbackDirection)
+        bool hasLockedTarget, Vector3 targetPosition, Vector3 fallbackDirection)
     {
         if (arm == null) return;
         Quaternion correction;
@@ -4361,8 +4849,8 @@ public class TestPlayController : MonoBehaviour
             {
                 // FUN_004cd840 projects target into the arm's local XY plane,
                 // measures from -Y, and rotates about local Z only. No gun IK.
-                Vector3 local = arm.InverseTransformVector(locked != null
-                    ? locked.position - arm.position : fallbackDirection);
+                Vector3 local = arm.InverseTransformVector(hasLockedTarget
+                    ? targetPosition - arm.position : fallbackDirection);
                 local.z = 0f;
                 local.Normalize();
                 float dot = -local.y;
@@ -4438,6 +4926,12 @@ public class TestPlayController : MonoBehaviour
         // and type 52 for ChangeWeapon(SWORD). Keep the source-command VM path
         // equivalent to those compiled handlers.
         ApplyOriginalWeaponModelVisibility(heldWeapon == "GUN");
+        // FUN_004f97f0 also ends every registered BB_SwordBeam (+0xE60),
+        // including beams not marked as the replaceable managed effect.
+        // FUN_004f9930 does not end them when selecting SWORD again.
+        if (heldWeapon == "GUN")
+            for (int i = activeSwordBeams.Count - 1; i >= 0; i--)
+                RemoveActiveSwordBeamAt(i);
     }
 
     void SetAttackPower(List<TestPlayScriptValue> args)
@@ -4530,7 +5024,7 @@ public class TestPlayController : MonoBehaviour
     {
         camEffect = value;
         TestPlayPresentationAdapterKind adapter = cameraController != null && cameraController.approximateCameraEffects
-            ? TestPlayPresentationAdapterKind.CameraShakeApproximation
+            ? TestPlayPresentationAdapterKind.OriginalCameraPlacement
             : TestPlayPresentationAdapterKind.None;
         RaisePresentationEvent(TestPlayPresentationCore.CreateCameraEffect(args, value, adapter));
         RaiseRuntimeEvent(TestPlayRuntimeEventType.CameraEffect, "CamEffect", args, "", Mathf.RoundToInt(value), value);
@@ -4538,34 +5032,50 @@ public class TestPlayController : MonoBehaviour
 
     void SpawnWeapon(List<TestPlayScriptValue> args, string source)
     {
-        int weaponType = args.Count > 1 ? args[1].AsInt() : 0;
-        float energy = args.Count > 3 ? args[3].AsFloat() : 0f;
-        if (energy > 0f)
-            SetMovementEnergy(currentEnergy - energy);
-
-        float damage = GetCurrentAttackDamage(EstimateDamageForWeapon(weaponType));
-        float speed = EstimateSpeed(args, defaultProjectileSpeed);
-        SpawnProjectile(
-            source + ":" + weaponType,
-            damage,
-            speed,
-            IsHomingWeapon(weaponType),
-            TestPlayCombatCore.ResolveRunProcCollisionKind(weaponType));
+        DispatchProc(args, source);
     }
 
     void SpawnRunProc(List<TestPlayScriptValue> args, bool extended)
     {
-        int procType = args.Count > 1 ? args[1].AsInt() : 0;
-        RaisePresentationEvent(TestPlayPresentationCore.CreateProc(
-            extended,
-            args,
-            ResolveRunProcPresentationAdapter(extended, args, procType)));
+        DispatchProc(args, extended ? "RunProc2" : "RunProc");
+    }
+
+    void DispatchProc(List<TestPlayScriptValue> sourceArguments, string source)
+    {
+        if (!TestPlayProcDispatch.TryNormalize(sourceArguments, out var args))
+        {
+            ReportProcDiagnostic(source, sourceArguments, -1, -1, "InvalidProcArguments");
+            return;
+        }
+        int procType = args[1].AsInt();
+        int subtype = procType == 62 ? args[3].AsInt() : -1;
+        TestPlayProcSupport support = TestPlayProcDispatch.GetSupport(procType, subtype);
+        // No-op/unsupported must return BEFORE energy, ATTACK snapshot or spawning.
+        if (support == TestPlayProcSupport.NoOp) return;
+        if (support == TestPlayProcSupport.Unsupported)
+        {
+            ReportProcDiagnostic(source, sourceArguments, procType, subtype, "UnsupportedProc");
+            return;
+        }
+        if (support == TestPlayProcSupport.PresentationApproximation)
+            ReportProcDiagnostic(source, sourceArguments, procType, subtype, "ApproximateProcPresentation");
+
+        // Existing parameter readers distinguish short wind vs extended effects.
+        // This selects their schema by TYPE, never by the incoming command alias.
+        bool extended = procType != 53 && procType != 54;
+        var procEvent = TestPlayPresentationCore.CreateProc(extended, args,
+            ResolveRunProcPresentationAdapter(extended, args, procType));
+        procEvent.command = source;
+        procEvent.arguments = sourceArguments.ToArray(); // preserve literal trace/alias, including arg0
+        if (support == TestPlayProcSupport.PresentationApproximation)
+            procEvent.evidence = TestPlayPresentationEvidence.IncompleteInference;
+        RaisePresentationEvent(procEvent);
         // FUN_004b74a0 dispatches proc type 51/52 to FUN_004f97f0/
         // FUN_004f9930. Type 51 is ChangeWeapon(GUN); type 52 is
         // ChangeWeapon(SWORD). Each recursively switches the paired SPT sets.
         if (procType == 51 || procType == 52)
         {
-            ApplyOriginalWeaponModelVisibility(procType == 51);
+            SetHeldWeapon(procType == 51 ? "GUN" : "SWORD");
             return;
         }
         // FUN_004b74a0 dispatches RunProc type 53/54 to FUN_004f99f0/
@@ -4578,12 +5088,12 @@ public class TestPlayController : MonoBehaviour
         }
         if (TestPlayPresentationCore.IsOriginalSwordBeamProc(extended, procType))
         {
-            SpawnOriginalSwordEffect(args, "RunProc2:55");
+            SpawnOriginalSwordEffect(args, source + ":55");
             return;
         }
         if (TestPlayPresentationCore.IsOriginalThunderEffectProc(extended, procType))
         {
-            SpawnOriginalThunderEffect(args, "RunProc2:60");
+            SpawnOriginalThunderEffect(args, source + ":60");
             return;
         }
         if (procType == TestPlayPresentationCore.SwordBeamProcType)
@@ -4591,52 +5101,97 @@ public class TestPlayController : MonoBehaviour
             return;
         }
 
-        if (extended && procType == 1)
+        if (procType == 56 || procType == 58 || (procType == 62 &&
+            (subtype == 0 || subtype == 1 || subtype == 4 || subtype == 5 || subtype == 7 || subtype == 10)))
+        { SpawnActionEffect(args, procType, subtype, source); return; }
+        if (TestPlaySupportAttack.Supports(procType) || (procType == 62 && subtype == 9))
+        { SpawnOriginalSupport(args, source + ":" + procType); return; }
+        if (TestPlayOrdnanceParameters.Supports(procType))
+        { SpawnOriginalOrdnance(args,source+":"+procType,procType); return; }
+        if (TestPlayBeamParameters.Supports(procType))
         {
-            SpawnOriginalType1Projectile(args);
+            SpawnOriginalBeam(args, source + ":" + procType, procType);
+            return;
+        }
+        if (procType == 6)
+        {
+            SpawnOriginalType6Projectile(args, source + ":6");
+            return;
+        }
+        if (procType == 11)
+        {
+            SpawnOriginalType6Projectile(args, source + ":11", true);
+            return;
+        }
+        if (procType == 9 || procType == 26 || procType == 18 || procType == 31 || procType == 5 || procType == 29 || procType == 32 || procType == 33)
+        {
+            SpawnOriginalType6Projectile(args, source + ":" + procType, false, procType);
+            return;
+        }
+        if (procType == 1)
+        {
+            SpawnOriginalType1Projectile(args, source + ":1");
             return;
         }
 
         if (procType == 57)
         {
-            SpawnMeleeAttack(args, extended ? "RunProc2:57" : "RunProc:57", EstimateDamageForWeapon(procType));
+            SpawnMeleeAttack(args, source + ":57", EstimateDamageForWeapon(procType));
             return;
         }
 
         if (procType == 62)
         {
-            int subtype = args.Count > 3 ? args[3].AsInt() : 0;
+            if (subtype == 11)
+            {
+                SpawnOriginalTiri2(args, source + ":62:11");
+                return;
+            }
             if (TestPlayPresentationCore.IsOriginalWindRingSpecialProc(extended, procType, subtype))
             {
-                SpawnOriginalWindRingSpecialEffect(args, "RunProc2:62:2");
+                SpawnOriginalWindRingSpecialEffect(args, source + ":62:2");
                 return;
             }
             if (TestPlayPresentationCore.IsOriginalBurnerBurstProc(extended, procType, subtype))
             {
-                SpawnOriginalBurnerBurstEffect(args, "RunProc2:62:3");
+                SpawnOriginalBurnerBurstEffect(args, source + ":62:3");
                 return;
             }
             if (TestPlayPresentationCore.IsOriginalHinokoProc(extended, procType, subtype))
             {
-                SpawnOriginalHinokoEffect(args, "RunProc2:62:6");
+                SpawnOriginalHinokoEffect(args, source + ":62:6");
                 return;
             }
             if (TestPlayPresentationCore.IsOriginalMagicShieldProc(extended, procType, subtype))
             {
-                SpawnOriginalMagicShieldEffect(args, "RunProc2:62:8");
+                SpawnOriginalMagicShieldEffect(args, source + ":62:8");
                 return;
             }
-            if (extended && TrySpawnOriginalSpecialEffect(args, subtype))
-                return;
             return;
         }
 
-        int textureId = extended ? GetRunProcTextureId(args, procType) : -1;
-        Vector2 visualSize = GetRunProcVisualSize(args, procType);
-        SpawnProjectile((extended ? "RunProc2:" : "RunProc:") + procType,
-            GetCurrentAttackDamage(EstimateDamageForWeapon(procType)), EstimateSpeed(args, defaultProjectileSpeed),
-            IsHomingWeapon(procType), textureId, visualSize,
-            TestPlayCombatCore.ResolveRunProcCollisionKind(procType));
+        // A newly classified type without a handler must fail closed as well.
+        ReportProcDiagnostic(source, sourceArguments, procType, subtype, "MissingProcHandler");
+    }
+
+    void ReportProcDiagnostic(string source, List<TestPlayScriptValue> args,
+        int procType, int subtype, string diagnostic)
+    {
+        string key = procType + (procType == 62 ? ":" + subtype : "");
+        string detail = diagnostic + ":" + TestPlayProcDispatch.GetKind(procType);
+        var value = TestPlayPresentationCore.CreateUnsupported(source, args, detail);
+        value.procType = procType;
+        value.subtype = subtype;
+        value.source = source + ":" + key;
+        value.evidence = diagnostic == "ApproximateProcPresentation"
+            ? TestPlayPresentationEvidence.UnityAlternative : TestPlayPresentationEvidence.Unknown;
+        RaisePresentationEvent(value);
+        RaiseRuntimeEvent(TestPlayRuntimeEventType.Warning, source, args, detail, procType, subtype);
+        // Every invocation stays observable in trace; Console warns once per runtime reset.
+        if (logUnhandledCommands && procDiagnosticWarnings.Add(key + ":" + diagnostic))
+            Debug.LogWarning("[TestPlay] type " + key +
+                (diagnostic == "ApproximateProcPresentation" ? " は近似表示です。" : " は未対応、または引数が不正です。") +
+                " (" + source + ", " + detail + ")");
     }
 
     TestPlayPresentationAdapterKind ResolveRunProcPresentationAdapter(
@@ -4672,6 +5227,9 @@ public class TestPlayController : MonoBehaviour
                 : TestPlayPresentationAdapterKind.None;
         }
         int subtype = args != null && args.Count > 3 ? args[3].AsInt() : -1;
+        if (procType == 62 && subtype == 11)
+            return presentationRuntime != null && presentationRuntime.HasOriginalNamedTexture(TestPlayTiri2Effect.TextureName)
+                ? TestPlayPresentationAdapterKind.OriginalTextureQuad : TestPlayPresentationAdapterKind.None;
         if (TestPlayPresentationCore.IsOriginalWindRingSpecialProc(extended, procType, subtype))
         {
             return TestPlayPresentationCore.TryCreateOriginalWindRingSpecialParameters(
@@ -4727,9 +5285,18 @@ public class TestPlayController : MonoBehaviour
             return TestPlayPresentationAdapterKind.None;
 
         string key = "RunProc:" + procType;
-        return presentationRuntime != null && presentationRuntime.HasMappedEffect(key)
-            ? TestPlayPresentationAdapterKind.MappedPrefab
-            : TestPlayPresentationAdapterKind.PrimitiveFallback;
+        if (presentationRuntime != null && presentationRuntime.HasMappedEffect(key))
+            return TestPlayPresentationAdapterKind.MappedPrefab;
+        if (procType == TestPlayPresentationCore.WindLineProcType &&
+            presentationRuntime != null &&
+            presentationRuntime.HasOriginalTexture(TestPlayPresentationCore.OriginalWindLineTextureId))
+            return TestPlayPresentationAdapterKind.OriginalTextureQuad;
+        if (procType == TestPlayPresentationCore.WindRingProcType &&
+            presentationRuntime != null &&
+            presentationRuntime.HasOriginalNamedTexture(
+                TestPlayPresentationCore.OriginalWindRing2TextureFileName))
+            return TestPlayPresentationAdapterKind.OriginalTextureQuad;
+        return TestPlayPresentationAdapterKind.PrimitiveFallback;
     }
 
     void SpawnOriginalWindProc(int procType)
@@ -4740,69 +5307,268 @@ public class TestPlayController : MonoBehaviour
         Transform root = robo.root.transform;
         if (procType == TestPlayPresentationCore.WindLineProcType)
         {
-            Quaternion rotation = Quaternion.LookRotation(-root.forward, root.up);
+            Vector3 direction = root.forward.sqrMagnitude > 0.000001f
+                ? root.forward.normalized
+                : Vector3.forward;
+            Quaternion rotation = Quaternion.LookRotation(-direction, root.up);
             for (int i = 0; i < TestPlayPresentationCore.OriginalWindLineCount; i++)
             {
                 Vector3 position = root.position + root.rotation * DeterministicWindLineOffsets[i];
-                SpawnOriginalWindVisual(procType, position, rotation, TestPlayWindEffectKind.WindLine);
+                SpawnOriginalWindLineVisual(
+                    procType,
+                    position,
+                    rotation,
+                    direction);
             }
             return;
         }
 
         if (procType == TestPlayPresentationCore.WindRingProcType)
-            SpawnOriginalWindVisual(procType, root.position, root.rotation, TestPlayWindEffectKind.WindRing);
+            SpawnOriginalWindRing2(root);
     }
 
-    void SpawnOriginalWindVisual(
+    void SpawnOriginalWindLineVisual(
         int procType,
         Vector3 position,
         Quaternion rotation,
-        TestPlayWindEffectKind kind)
+        Vector3 windDirection)
     {
         string key = "RunProc:" + procType;
         GameObject go = presentationRuntime != null
             ? presentationRuntime.CreateMappedEffect(key, position, rotation)
             : null;
         bool mappedEffect = go != null;
+        Texture2D originalTexture = presentationRuntime != null
+            ? presentationRuntime.GetOriginalTexture(TestPlayPresentationCore.OriginalWindLineTextureId)
+            : null;
+        if (go == null && originalTexture == null && presentationRuntime != null && presentationRuntime.UsesExternalResources) return;
+        TestPlayWindEffect windEffect = go != null ? go.GetComponent<TestPlayWindEffect>() : null;
         if (go == null)
         {
             go = new GameObject("TestPlayEffect_" + key);
             go.transform.SetPositionAndRotation(position, rotation);
-            TestPlayWindEffect effect = go.AddComponent<TestPlayWindEffect>();
+            windEffect = go.AddComponent<TestPlayWindEffect>();
             Shader shader = presentationRuntime != null ? presentationRuntime.originalEffectShader : null;
-            if (kind == TestPlayWindEffectKind.WindLine)
-            {
-                effect.ConfigureWindLine(
-                    TestPlayPresentationCore.OriginalWindLineWidth,
-                    TestPlayPresentationCore.OriginalWindLineLength,
-                    windEffectLifeSeconds,
-                    windEffectColor,
-                    shader);
-            }
-            else
-            {
-                effect.ConfigureWindRing(
-                    TestPlayPresentationCore.OriginalWindRingRadius,
-                    windEffectLifeSeconds,
-                    windRingExpansionPerSecond,
-                    windEffectColor,
-                    shader);
-            }
+            windEffect.ConfigureWindLine(
+                TestPlayPresentationCore.OriginalWindLineWidth,
+                TestPlayPresentationCore.OriginalWindLineLength,
+                0f,
+                Color.white,
+                shader,
+                originalTexture);
         }
 
+        bool usesOriginalTexture = !mappedEffect && originalTexture != null;
         TestPlayPresentationAdapterKind adapter = mappedEffect
             ? TestPlayPresentationAdapterKind.MappedPrefab
-            : TestPlayPresentationAdapterKind.PrimitiveFallback;
+            : usesOriginalTexture
+                ? TestPlayPresentationAdapterKind.OriginalTextureQuad
+                : TestPlayPresentationAdapterKind.PrimitiveFallback;
+        int textureId = usesOriginalTexture
+            ? TestPlayPresentationCore.OriginalWindLineTextureId
+            : -1;
+        string diagnostic = mappedEffect
+            ? "OriginalMovementAndLifetimeWithMappedPrefabDeterministicScatter"
+            : usesOriginalTexture
+                ? "OriginalTextureMovementFadeAndLifetimeWithDeterministicScatter"
+                : "OriginalMovementFadeAndLifetimeWithPrimitiveDeterministicScatter";
         RaisePresentationEvent(TestPlayPresentationCore.CreateVisual(
             key,
-            -1,
+            textureId,
             adapter,
             TestPlayPresentationEvidence.OriginalExecutableConfirmed,
-            "OriginalCountAndDimensionsWithUnityLifetimeAndDeterministicScatter"));
+            diagnostic));
         spawnedTransientObjects.Add(go);
-        RaiseRuntimeEvent(TestPlayRuntimeEventType.EffectSpawned, key, null, key, procType, windEffectLifeSeconds);
-        if (mappedEffect && Application.isPlaying && windEffectLifeSeconds > 0f)
-            Destroy(go, windEffectLifeSeconds);
+        Vector3 normalizedDirection = windDirection.sqrMagnitude > 0.000001f
+            ? windDirection.normalized
+            : Vector3.forward;
+        activeWindLineEffects.Add(new ActiveWindLineEffect
+        {
+            visualRoot = go,
+            visual = windEffect,
+            movementPerTick = -normalizedDirection * TestPlayPresentationCore.OriginalWindLineTravelPerTick,
+            state = TestPlayPresentationCore.CreateOriginalWindLineState()
+        });
+        RaiseRuntimeEvent(
+            TestPlayRuntimeEventType.EffectSpawned,
+            key,
+            null,
+            TestPlayPresentationCore.OriginalWindLineTextureFileName,
+            procType,
+            TestPlayPresentationCore.OriginalWindLineLifetimeTicks);
+    }
+
+    void SpawnOriginalWindRing2(Transform root)
+    {
+        const string key = "RunProc:54";
+        TestPlayWindRing2State state = TestPlayPresentationCore.CreateOriginalWindRing2State();
+        GameObject go = presentationRuntime != null
+            ? presentationRuntime.CreateMappedEffect(key, root.position, root.rotation)
+            : null;
+        bool mappedEffect = go != null;
+        TestPlayOriginalEffect originalVisual = go != null
+            ? go.GetComponent<TestPlayOriginalEffect>()
+            : null;
+        TestPlayWindEffect fallbackVisual = null;
+
+        if (go == null && presentationRuntime != null)
+        {
+            go = presentationRuntime.CreateOriginalNamedTextureEffect(
+                TestPlayPresentationCore.OriginalWindRing2TextureFileName,
+                root.position,
+                root.rotation,
+                new Vector2(state.size, state.size),
+                0f,
+                Color.white,
+                true);
+            originalVisual = go != null ? go.GetComponent<TestPlayOriginalEffect>() : null;
+        }
+
+        if (go == null && presentationRuntime != null && presentationRuntime.UsesExternalResources) return;
+        if (go == null)
+        {
+            go = new GameObject("TestPlayEffect_" + key);
+            go.transform.SetPositionAndRotation(root.position, root.rotation);
+            fallbackVisual = go.AddComponent<TestPlayWindEffect>();
+            fallbackVisual.ConfigureWindRing(
+                state.size,
+                0f,
+                0f,
+                windEffectColor,
+                presentationRuntime != null ? presentationRuntime.originalEffectShader : null);
+        }
+
+        if (originalVisual != null)
+        {
+            // FUN_00504dc0 derives the BB_WindRing2 orientation from the
+            // source direction. Unity keeps that spawn-time direction as the
+            // around-camera billboard axis; the DX9 draw matrix is not exposed.
+            originalVisual.billboardAxis = root.forward.sqrMagnitude > 0.000001f
+                ? root.forward.normalized
+                : Vector3.forward;
+        }
+
+        go.name = "TestPlayEffect_" + key;
+        spawnedTransientObjects.Add(go);
+        activeWindRing2Effects.Add(new ActiveWindRing2Effect
+        {
+            state = state,
+            visualRoot = go,
+            originalVisual = originalVisual,
+            fallbackVisual = fallbackVisual,
+            mappedPrefab = mappedEffect,
+            mappedBaseScale = go.transform.localScale
+        });
+
+        bool usesOriginalTexture = !mappedEffect && originalVisual != null &&
+            originalVisual.sourceTexture != null;
+        TestPlayPresentationAdapterKind adapter = mappedEffect
+            ? TestPlayPresentationAdapterKind.MappedPrefab
+            : usesOriginalTexture
+                ? TestPlayPresentationAdapterKind.OriginalTextureQuad
+                : TestPlayPresentationAdapterKind.PrimitiveFallback;
+        RaisePresentationEvent(TestPlayPresentationCore.CreateVisual(
+            key,
+            usesOriginalTexture ? TestPlayPresentationCore.OriginalWindRing2TextureId : -1,
+            adapter,
+            TestPlayPresentationEvidence.OriginalExecutableConfirmed,
+            mappedEffect
+                ? "OriginalBBWindRing2LifecycleWithMappedPrefab"
+                : usesOriginalTexture
+                    ? "OriginalBBWindRing2TextureGrowthFadeWithUnityBillboardAdapter"
+                    : "OriginalBBWindRing2GrowthFadeWithPrimitiveFallback"));
+        RaiseRuntimeEvent(
+            TestPlayRuntimeEventType.EffectSpawned,
+            key,
+            null,
+            TestPlayPresentationCore.OriginalWindRing2TextureFileName,
+            intValue: TestPlayPresentationCore.WindRingProcType,
+            floatValue: TestPlayPresentationCore.OriginalWindRing2LifetimeTicks);
+    }
+
+    void TickActiveWindLineEffects()
+    {
+        for (int i = activeWindLineEffects.Count - 1; i >= 0; i--)
+        {
+            ActiveWindLineEffect active = activeWindLineEffects[i];
+            if (active == null || active.visualRoot == null)
+            {
+                RemoveActiveWindLineEffectAt(i);
+                continue;
+            }
+
+            // FUN_00491960: move opposite the normalized spawn-time direction,
+            // then subtract 12 alpha and expire when the candidate becomes negative.
+            active.visualRoot.transform.position += active.movementPerTick;
+            if (!TestPlayPresentationCore.AdvanceOriginalWindLine(ref active.state))
+            {
+                RemoveActiveWindLineEffectAt(i);
+                continue;
+            }
+            if (active.visual != null)
+                active.visual.SetOriginalWindLineAlpha(active.state.alpha);
+        }
+    }
+
+    void RemoveActiveWindLineEffectAt(int index)
+    {
+        ActiveWindLineEffect active = activeWindLineEffects[index];
+        activeWindLineEffects.RemoveAt(index);
+        if (active == null || active.visualRoot == null)
+            return;
+
+        spawnedTransientObjects.Remove(active.visualRoot);
+        if (Application.isPlaying)
+            Destroy(active.visualRoot);
+        else
+            DestroyImmediate(active.visualRoot);
+    }
+
+    void TickActiveWindRing2Effects()
+    {
+        for (int i = activeWindRing2Effects.Count - 1; i >= 0; i--)
+        {
+            ActiveWindRing2Effect active = activeWindRing2Effects[i];
+            if (active == null || active.visualRoot == null ||
+                !TestPlayPresentationCore.AdvanceOriginalWindRing2(ref active.state))
+            {
+                RemoveActiveWindRing2EffectAt(i);
+                continue;
+            }
+
+            if (active.originalVisual != null)
+            {
+                active.originalVisual.SetDisplaySize(new Vector2(active.state.size, active.state.size));
+                Color tint = Color.white;
+                tint.a = active.state.alphaByte / 255f;
+                active.originalVisual.SetTint(tint);
+            }
+            else if (active.fallbackVisual != null)
+            {
+                active.fallbackVisual.SetOriginalWindRingState(
+                    active.state.size,
+                    active.state.alphaByte);
+            }
+            else if (active.mappedPrefab)
+            {
+                active.visualRoot.transform.localScale = active.mappedBaseScale *
+                    (active.state.size / TestPlayPresentationCore.OriginalWindRing2InitialSize);
+            }
+        }
+    }
+
+    void RemoveActiveWindRing2EffectAt(int index)
+    {
+        ActiveWindRing2Effect active = activeWindRing2Effects[index];
+        activeWindRing2Effects.RemoveAt(index);
+        if (active == null || active.visualRoot == null)
+            return;
+
+        spawnedTransientObjects.Remove(active.visualRoot);
+        if (Application.isPlaying)
+            Destroy(active.visualRoot);
+        else
+            DestroyImmediate(active.visualRoot);
     }
 
     void ApplyOriginalWeaponModelVisibility(bool gunVisible)
@@ -4841,9 +5607,247 @@ public class TestPlayController : MonoBehaviour
             attackProfile, fallback, 0f, false, "Damage").damage);
     }
 
-    void SpawnOriginalType1Projectile(List<TestPlayScriptValue> args)
+    void SpawnOriginalOrdnance(List<TestPlayScriptValue> args,string source,int type)
     {
-        const string source = "RunProc2:1";
+        if(args==null||args.Count<(type==10||type==19?5:4)||RuntimeSptData==null)return;
+        var parameters=TestPlayOrdnanceParameters.FromScript(type,args);
+        if(!RuntimeSptData.WeaponPoints.TryGetValue(parameters.weaponPoint,out var wp)||wp?.BoneTr==null)return;
+        if(parameters.cost>currentAuxiliaryEnergy)return;
+        SetAuxiliaryEnergy(currentAuxiliaryEnergy-parameters.cost);EnsureAttackProfile();
+        var shot=new PendingType1Shot {ordnance=parameters,weaponPoint=wp,args=new List<TestPlayScriptValue>(args),
+            payload=TestPlayCombatCore.CreateProjectilePayload(attackProfile,EstimateDamageForWeapon(type),parameters.speed*originalTickRate,
+                false,source,attackFlag,TestPlayCombatCore.ResolveRunProcCollisionKind(type))};
+        if(simulatingCombatTick)pendingType1Shots.Add(shot);else EmitOriginalOrdnance(shot);
+    }
+    void EmitOriginalOrdnance(PendingType1Shot shot)
+    {
+        var p=shot.ordnance.Copy();var wp=shot.weaponPoint;if(wp?.BoneTr==null)return;
+        Vector3 position=wp.BoneTr.position;Quaternion rotation=Quaternion.LookRotation(wp.WorldForward,wp.BoneTr.up);
+        int seed=unchecked(++type11ShotSequence*397^tick*7919^sessionMech.MechId);var random=new System.Random(seed);
+        if(p.type==3){rotation*=Quaternion.AngleAxis(random.Next(-15,16),Vector3.up)*Quaternion.AngleAxis(random.Next(-15,16),Vector3.right);p.speed=.5f+(float)random.NextDouble()*.2f;}
+        if(p.type==7)
+        {
+            var root=robo.root.transform;
+            p.velocity=(root.forward+root.right*((float)random.NextDouble()*.6f-.3f)+Vector3.up*.3f).normalized*(.3f+(float)random.NextDouble()*.1f);
+            p.ticks=random.Next(150,251);
+        }
+        if(p.type==8){p.velocity=(robo.root.transform.forward+Vector3.up*.5f).normalized*.1f;p.variant=random.Next(2);}
+        if(p.type==10||p.type==19)p.velocity=wp.WorldForward*.1f;
+        if(p.type==16)p.velocity=wp.WorldForward*.3f;
+        if(p.type==35)p.velocity=wp.WorldForward*.5f; // retained, original update does not consume it
+        if(p.type==20&&GetLockedTargetTransform()!=null&&!OriginalCannonGuidanceSuppressed)
+        {
+            Vector3 aim=GetLockedTargetTransform().position;
+            if(session!=null&&session.TryGet(sessionLock,out var t))aim=(t.ShotCapsuleStart+t.ShotCapsuleEnd)*.5f;
+            rotation=TestPlayCombatCore.ResolveOriginalType1InitialRotation(rotation,position,true,aim);
+            p.turn=Mathf.Max(0,1-Vector3.Distance(position,aim)/100)*.46f;
+        }
+        CreateOrdnance(p,shot.payload,position,rotation,sessionLock,seed);
+        if(p.sound>=0)PlayOrdnanceSound(p.sound,"Type"+p.type+"Launch");
+        if(p.type==20)SpawnCannonPuff(position,true);
+        if(p.type==27)SpawnOrdnanceBurst(position,3,2);
+        RecordCombatEvent(new TestPlayCombatTraceEvent {type=TestPlayCombatTraceEventType.ProjectileSpawned,
+            actionId=currentAnimationIndex,source=shot.payload.source,damage=shot.payload.damage,down=shot.payload.down,
+            force=shot.payload.horizontalImpactForce,forceY=shot.payload.verticalImpactForce,attackFlag=shot.payload.attackFlag,valueSource=shot.payload.valueSource});
+        RaiseRuntimeEvent(TestPlayRuntimeEventType.WeaponSpawned,shot.payload.source,shot.args,"WEAPONPOINT:"+p.weaponPoint,p.ticks,p.speed);
+    }
+    TestPlayProjectile CreateOrdnance(TestPlayOrdnanceParameters parameters,TestPlayProjectilePayload payload,
+        Vector3 position,Quaternion rotation,MechHandle guidance,int seed,TestPlayProjectile parent=null)
+    {
+        var go=new GameObject("TestPlayOrdnance_"+payload.source);go.transform.SetPositionAndRotation(position,rotation);
+        GameObject model=parameters.model>=0?AttachCannonModel(go.transform,parameters.model):null;
+        if(model!=null)model.name="OrdnanceModel_"+parameters.model;
+        var binding=presentationRuntime?.originalTextures.Find(x=>x.loadSequence==parameters.rawTexture);
+        if(parameters.type==7||parameters.type==8||parameters.type==27)
+        {
+            if(binding?.texture!=null)
+            {
+                var visual=presentationRuntime.CreateOriginalNamedTextureEffect(binding.originalFileName,position,rotation,Vector2.one*parameters.size,0,Color.white);
+                if(visual!=null){visual.transform.SetParent(go.transform,true);if(parameters.type==27)visual.GetComponent<TestPlayOriginalEffect>()?.SetSheetFrame(8,8,0);}
+            }
+        }
+        else if(binding?.texture!=null && presentationRuntime.originalEffectShader!=null)
+            go.AddComponent<TestPlayType1TrailEffect>().Initialize(binding.texture,presentationRuntime.originalEffectShader,parameters.width,position);
+        var p=go.AddComponent<TestPlayProjectile>();p.owner=this;p.target=target;p.damage=payload.damage;p.downValue=payload.down;
+        p.horizontalImpactForce=payload.horizontalImpactForce;p.verticalImpactForce=payload.verticalImpactForce;p.attackFlag=payload.attackFlag;
+        p.collisionKind=payload.collisionKind;p.sourceCommand=payload.source;p.valueSource=payload.valueSource;p.speed=payload.speed;p.originalModelSlot=parameters.model;
+        p.ConfigureOriginalType1(new TestPlayType1ProjectileParameters{weaponPointId=parameters.weaponPoint,distancePerTick=parameters.speed,
+            visualWidth=parameters.width,trailPointCount=parameters.trail,activeTicks=parameters.ticks,textureId=parameters.rawTexture},guidance.MechId>0,parameters.turn);
+        go.AddComponent<TestPlayOrdnanceAttack>().Configure(p,parameters,model!=null?model.transform:null,seed);
+        if(parent==null)session?.RegisterProjectile(p,sessionMech,guidance);else session?.RegisterChildProjectile(p,parent,guidance);
+        spawnedTransientObjects.Add(go);return p;
+    }
+    internal void SpawnMissileChild(TestPlayProjectile parent,Quaternion spread,float speed)
+    {
+        var parameters=new TestPlayOrdnanceParameters{type=3,model=0,trail=20,width=.1f,speed=speed,turn=.3f,ticks=300,rawTexture=6};
+        var payload=parent.GetComponent<TestPlayOrdnanceAttack>().Payload();payload.source="Type4Child";
+        CreateOrdnance(parameters,payload,parent.transform.position,parent.transform.rotation*spread,parent.ModelGuidance,unchecked(++type11ShotSequence*397),parent);
+    }
+    internal void SpawnCrasyBallChild(TestPlayProjectile parent,int variant,Quaternion rotation)
+    {
+        var parameters=new TestPlayBeamParameters{type=variant==0?2:14,capacity=20,ticks=300,width=.15f,speed=.7f,rawTexture=variant==0?0:4,interval=10};
+        var payload=new TestPlayProjectilePayload{source="Type8Child",damage=120,down=50,horizontalImpactForce=.05f,verticalImpactForce=2,
+            attackFlag=parent.attackFlag,collisionKind=TestPlayAttackCollisionKind.OriginalBeam,valueSource=TestPlayCombatValueSource.OriginalScriptProfile,speed=42};
+        CreateBeam(parameters,payload,null,parent.transform.position,rotation,default,unchecked(++type11ShotSequence*397),parent);
+    }
+    internal void SpawnOrdnanceExplosion(TestPlayProjectile parent,Vector3 position,float size,float radius,TestPlayProjectilePayload payload)
+    {
+        payload.source=parent.sourceCommand+":Blast";payload.collisionKind=TestPlayAttackCollisionKind.OriginalBlast;
+        var parameters=new TestPlayOrdnanceParameters{type=27,size=size,radius=radius,ticks=98,rawTexture=3};
+        CreateOrdnance(parameters,payload,position,Quaternion.identity,default,unchecked(++type11ShotSequence*397),parent);
+    }
+    internal void PlayOrdnanceSound(int id,string source, Vector3? position = null)=>BeamSound(id,source,position);
+    internal void SpawnOrdnanceFlight(Vector3 position,int type)
+    {
+        // Asset choice is original (raw8/9 exhaust; raw2 fire). Billboard layout is Unity.
+        SpawnBeamMuzzle(position,type==20?.7f:type==4?.6f:.35f,type==20?"explode2.png":"burner2.png");
+        if(type!=20)SpawnBeamMuzzle(position,.2f,"beamHit3.png");
+    }
+    internal void SpawnOrdnanceBurst(Vector3 position,int count,float size)
+    {
+        if(presentationRuntime==null)return;
+        var root=new GameObject("OrdnanceVisualBurst");root.transform.position=position;
+        for(int i=0;i<count;i++)
+            AddSessionTextureLayer(root.transform,"explode1.png",position+new Vector3(SampleHinokoSigned(i+1,0),0,SampleHinokoSigned(i+1,2))*.2f,
+                Vector2.one*size,Color.white);
+        RegisterSessionCombatEffect(root,98,false);
+    }
+
+    void SpawnOriginalBeam(List<TestPlayScriptValue> args, string source, int type)
+    {
+        if (args == null || args.Count < 12 || RuntimeSptData == null) return;
+        var beam = TestPlayBeamParameters.FromScript(type, args);
+        if (!RuntimeSptData.WeaponPoints.TryGetValue(beam.weaponPoint, out var wp) || wp?.BoneTr == null) return;
+        if (beam.cost > currentAuxiliaryEnergy) return;
+        SetAuxiliaryEnergy(currentAuxiliaryEnergy - beam.cost);
+        // FUN_004f5070 consumes energy before testing the WP hidden byte.
+        // Unity hierarchy visibility is the adapter for that byte.
+        if (type == 25 && (!wp.BoneTr.gameObject.activeInHierarchy || TestPlayModelAttack.IsSourceBusy(wp.BoneTr))) return;
+        EnsureAttackProfile();
+        var shot = new PendingType1Shot { beam=beam, weaponPoint=wp, args=new List<TestPlayScriptValue>(args),
+            payload=TestPlayCombatCore.CreateProjectilePayload(attackProfile, EstimateDamageForWeapon(type),
+                beam.speed*originalTickRate, false, source, attackFlag, TestPlayAttackCollisionKind.OriginalBeam) };
+        if (simulatingCombatTick) pendingType1Shots.Add(shot); else EmitOriginalBeam(shot);
+    }
+
+    void EmitOriginalBeam(PendingType1Shot shot)
+    {
+        var beam=shot.beam.Copy(); var wp=shot.weaponPoint;
+        if (wp?.BoneTr == null) return;
+        Vector3 position=wp.BoneTr.position;
+        Quaternion rotation=Quaternion.LookRotation(wp.WorldForward,wp.BoneTr.up);
+        bool linked=GetLockedTargetTransform()!=null;
+        Vector3 aim=linked?GetLockedTargetTransform().position:position;
+        if (linked && session!=null && session.TryGet(sessionLock,out var targetSnapshot))
+            aim=(targetSnapshot.ShotCapsuleStart+targetSnapshot.ShotCapsuleEnd)*.5f;
+        if (beam.type==14 && OriginalCannonGuidanceSuppressed) linked=false;
+        if ((beam.type==14 || (beam.type==24 && !beam.suppressInitialAim && !OriginalCannonGuidanceSuppressed)))
+            rotation=TestPlayCombatCore.ResolveOriginalType1InitialRotation(rotation,position,linked,aim);
+        if (beam.type==14) beam.turn=linked?Mathf.Max(0,1-Vector3.Distance(position,aim)/100f)*.35f*beam.turn:0;
+        int seed=unchecked(++type11ShotSequence*397 ^ tick*7919 ^ sessionMech.MechId);
+        var random=new System.Random(seed);
+        // Original random local-axis emission, with a deterministic Unity RNG adapter.
+        if (beam.type==12) rotation=rotation*Quaternion.AngleAxis((float)random.NextDouble()*20-10,Vector3.up)*Quaternion.AngleAxis((float)random.NextDouble()*20-10,Vector3.right);
+        if (beam.type==21) rotation=rotation*Quaternion.AngleAxis((float)random.NextDouble()*360,Vector3.up);
+        CreateBeam(beam,shot.payload,wp,position,rotation,linked?sessionLock:default,seed);
+        SpawnBeamMuzzle(position,beam.type==12?.1f:beam.type==13||beam.type==14?1.5f:.5f,
+            beam.type==13||beam.type==14?"GSmoke.png":"beamHit3.png");
+        if (beam.type==14 || beam.type==21 || beam.Persistent) BeamSound(0,"Type"+beam.type+"Launch");
+        RecordCombatEvent(new TestPlayCombatTraceEvent {type=TestPlayCombatTraceEventType.ProjectileSpawned,
+            actionId=currentAnimationIndex,source=shot.payload.source,damage=shot.payload.damage,down=shot.payload.down,
+            force=shot.payload.horizontalImpactForce,forceY=shot.payload.verticalImpactForce,
+            attackFlag=shot.payload.attackFlag,valueSource=shot.payload.valueSource});
+        RaiseRuntimeEvent(TestPlayRuntimeEventType.WeaponSpawned,shot.payload.source,shot.args,
+            "WEAPONPOINT:"+beam.weaponPoint,beam.ticks,beam.speed);
+    }
+
+    TestPlayProjectile CreateBeam(TestPlayBeamParameters beam, TestPlayProjectilePayload payload,
+        WeaponPointInfo wp,Vector3 position,Quaternion rotation,MechHandle guidance,int seed,TestPlayProjectile parent=null)
+    {
+        var go=new GameObject("TestPlayProjectile_"+payload.source);
+        go.transform.SetPositionAndRotation(position,rotation);
+        var binding=presentationRuntime?.originalTextures.Find(x=>x.loadSequence==beam.rawTexture);
+        if(binding!=null && binding.texture!=null && presentationRuntime.originalEffectShader!=null)
+            go.AddComponent<TestPlayType1TrailEffect>().Initialize(binding.texture,presentationRuntime.originalEffectShader,beam.width,position);
+        var shot=go.AddComponent<TestPlayProjectile>(); shot.owner=this;shot.target=target;
+        shot.damage=payload.damage;shot.downValue=payload.down;shot.horizontalImpactForce=payload.horizontalImpactForce;
+        shot.verticalImpactForce=payload.verticalImpactForce;shot.attackFlag=payload.attackFlag;shot.collisionKind=payload.collisionKind;
+        shot.sourceCommand=payload.source;shot.valueSource=payload.valueSource;shot.speed=payload.speed;
+        shot.ConfigureOriginalType1(new TestPlayType1ProjectileParameters {weaponPointId=beam.weaponPoint,
+            distancePerTick=beam.speed,visualWidth=beam.width,trailPointCount=beam.capacity,activeTicks=beam.ticks,textureId=beam.rawTexture},
+            guidance.MechId>0,beam.turn);
+        go.AddComponent<TestPlayBeamAttack>().Configure(shot,beam,wp,seed);
+        if(parent!=null)session?.RegisterChildProjectile(shot,parent,guidance);else session?.RegisterProjectile(shot,sessionMech,guidance);
+        spawnedTransientObjects.Add(go);
+        RaisePresentationEvent(TestPlayPresentationCore.CreateVisual(payload.source,beam.rawTexture,
+            binding?.texture!=null?TestPlayPresentationAdapterKind.OriginalTextureTrail:TestPlayPresentationAdapterKind.None));
+        return shot;
+    }
+
+    internal TestPlayProjectile SpawnReflectedBeam(TestPlayProjectile parent,TestPlayBeamAttack original,Vector3 position,Quaternion rotation)
+    {
+        var beam=original.Parameters.Copy();beam.followMuzzle=false;beam.wave=false;beam.shakeTicks=0;
+        beam.ticks=Mathf.Max(1,parent.remainingActiveTicks);
+        var payload=new TestPlayProjectilePayload {damage=parent.damage,down=parent.downValue,
+            horizontalImpactForce=parent.horizontalImpactForce,verticalImpactForce=parent.verticalImpactForce,
+            attackFlag=parent.attackFlag,collisionKind=parent.collisionKind,speed=parent.speed,
+            source=parent.sourceCommand+":Reflected",valueSource=parent.valueSource};
+        return CreateBeam(beam,payload,null,position,rotation,sessionLock,unchecked(++type11ShotSequence*397));
+    }
+
+    void BeamSound(int id,string source, Vector3? position = null)
+    {
+        var args=new List<TestPlayScriptValue> {TestPlayScriptValue.Number(id)};
+        var sound=TestPlayPresentationCore.CreateSound(args,presentationRuntime!=null?
+            presentationRuntime.ResolveAudioAdapter(TestPlayPresentationEventType.Sound,id.ToString()):TestPlayPresentationAdapterKind.None);
+        sound.source=source;sound.evidence=TestPlayPresentationEvidence.UnityAlternative;
+        sound.hasWorldPosition=position.HasValue;sound.worldPosition=position.GetValueOrDefault();
+        sound.diagnostic="Original handler sound slot; Unity spatial audio adapter.";
+        RaisePresentationEvent(sound);RaiseRuntimeEvent(TestPlayRuntimeEventType.Sound,"Snd",args,id.ToString());
+    }
+    internal void SpawnBeamMuzzle(Vector3 position,float size,string texture)
+    {
+        var effect=presentationRuntime?.CreateOriginalNamedTextureEffect(texture,position,Quaternion.identity,Vector2.one*size,0,Color.white);
+        if(effect!=null){effect.name="Beam_Muzzle";RegisterSessionCombatEffect(effect,12,false);}
+    }
+    internal void SpawnBeamSmoke(Vector3 position)
+    {
+        // 0048c610 / 0047bee0: LineSmokeOut is a three-tick, two-node
+        // downward helper with draw mode2. 0045e060 returns without drawing
+        // for mode2. Do not invent a visible GSmoke billboard for this flag.
+    }
+    internal void SpawnBeamContact(Vector3 position,bool terrain,bool guard)
+    {
+        if (guard) SpawnDefenseContact(position, false);
+        else CreateContactBurst(position, false, false);
+        BeamSound(7,terrain?"BeamTerrain":"BeamGuard",position);
+    }
+    internal TestPlayCameraController ResolvePresentationCamera()
+    {
+        // Original distance shake has a global sink. Restrict Unity routing to this session.
+        if (cameraController != null) return cameraController;
+        if (session != null)
+            foreach (var mech in session.Mechs)
+                if (mech.Controller?.cameraController != null) return mech.Controller.cameraController;
+        return null;
+    }
+    internal void RequestGrenadeCameraShake(Vector3 position)
+    {
+        ResolvePresentationCamera()?.RequestOriginalGrenadeShake(position);
+    }
+    internal void RequestBeamCameraShake(Vector3 position)
+    {
+        // Beam proximity shake is not an ANI camera placement command (00464c80).
+        var view = ResolvePresentationCamera();
+        if (view == null) return;
+        Vector3 eye = view.controlledCamera != null ? view.controlledCamera.transform.position : view.transform.position;
+        float distance = Vector3.Distance(eye, position);
+        if (distance < 7f)
+            view.RequestOriginalBeamShake(distance);
+    }
+
+    void SpawnOriginalType1Projectile(List<TestPlayScriptValue> args, string source)
+    {
         if (args == null || args.Count < 12 || RuntimeSptData == null)
         {
             LogUnhandled(source + " requires the original 12 arguments and parsed Script.spt WEAPONPOINT data.");
@@ -4890,13 +5894,69 @@ public class TestPlayController : MonoBehaviour
             EmitOriginalType1Projectile(shot);
     }
 
+    void SpawnOriginalType6Projectile(List<TestPlayScriptValue> args, string source, bool type11 = false, int cannonType = 0)
+    {
+        // WeaponAttack is Scr_RunProc in the original parser, not a persistent
+        // fire scheduler. ANI GoScriptIndex controls repetition and cadence.
+        int Value(int index) => args.Count > index ? args[index].AsInt() : 0;
+        bool modelAttack = cannonType == 5 || cannonType == 29 || cannonType == 32 || cannonType == 33;
+        var parameters = modelAttack ? new TestPlayType1ProjectileParameters { weaponPointId=Value(2), energyCost=Mathf.Max(0,Value(3)), textureId=-1,
+            distancePerTick=cannonType==5?.6f:cannonType==29?.5f:.25f, visualWidth=cannonType==5?.05f:.2f, trailPointCount=3, activeTicks=cannonType==29?30:0 } :
+            cannonType == 26 ? TestPlayCombatCore.CreateOriginalType26Parameters(Value(2), Value(3), Value(4)) :
+            cannonType == 31 ? TestPlayCombatCore.CreateOriginalType31Parameters(Value(2), Value(3)) :
+            cannonType == 18 ? TestPlayCombatCore.CreateOriginalType18Parameters(Value(2), Value(3)) :
+            cannonType == 9 ? TestPlayCombatCore.CreateOriginalType9Parameters(Value(2), Value(3)) :
+            type11 ? TestPlayCombatCore.CreateOriginalType11Parameters(Value(2), Value(3)) :
+            TestPlayCombatCore.CreateOriginalType6Parameters(
+                Value(2), Value(3), Value(4), Value(5), Value(6), Value(7));
+        if (RuntimeSptData == null || !RuntimeSptData.WeaponPoints.TryGetValue(
+                parameters.weaponPointId, out var point) || point?.BoneTr == null)
+        {
+            LogUnhandled(source + " requires a bound Script.spt WEAPONPOINT.");
+            return;
+        }
+        if ((cannonType == 31 || cannonType == 29) && (!RuntimeSptData.WeaponPoints.TryGetValue(Value(5), out var modelPoint) || modelPoint?.BoneTr == null))
+        {
+            LogUnhandled(source + " requires a bound model-orientation WEAPONPOINT.");
+            return;
+        }
+        if (cannonType == 5 && (TestPlayModelAttack.IsSourceBusy(point.BoneTr) || pendingType1Shots.Exists(x =>
+                x.payload.collisionKind == TestPlayAttackCollisionKind.OriginalType5 && x.weaponPoint.BoneTr == point.BoneTr))) return;
+        if (parameters.energyCost > currentAuxiliaryEnergy) return;
+        if (parameters.energyCost > 0) SetAuxiliaryEnergy(currentAuxiliaryEnergy - parameters.energyCost);
+        EnsureAttackProfile();
+        var shot = new PendingType1Shot {
+            bullet = true, parameters = parameters, weaponPoint = point,
+            args = new List<TestPlayScriptValue>(args),
+            payload = TestPlayCombatCore.CreateProjectilePayload(attackProfile,
+                EstimateDamageForWeapon(cannonType != 0 ? cannonType : 6), parameters.distancePerTick * originalTickRate,
+                false, source, attackFlag, cannonType != 0 ? TestPlayCombatCore.ResolveRunProcCollisionKind(cannonType) :
+                    type11 ? TestPlayAttackCollisionKind.OriginalType11 : TestPlayAttackCollisionKind.OriginalType6)
+        };
+        if (simulatingCombatTick) pendingType1Shots.Add(shot);
+        else EmitOriginalType1Projectile(shot);
+    }
+
     void EmitOriginalType1Projectile(PendingType1Shot shot)
     {
-        const string source = "RunProc2:1";
+        if (shot.support) { EmitOriginalSupport(shot.args, shot.payload.source); return; }
+        if (shot.ordnance != null) { EmitOriginalOrdnance(shot); return; }
+        if (shot.beam != null) { EmitOriginalBeam(shot); return; }
+        string source = shot.payload.source;
         var parameters = shot.parameters;
         var payload = shot.payload;
         var weaponPoint = shot.weaponPoint;
         var args = shot.args;
+        bool type11 = payload.collisionKind == TestPlayAttackCollisionKind.OriginalType11;
+        bool cannon = TestPlayCombatCore.IsOriginalCannon(payload.collisionKind);
+        bool penetratingCannon = payload.collisionKind == TestPlayAttackCollisionKind.OriginalType26;
+        bool modelCannon = payload.collisionKind == TestPlayAttackCollisionKind.OriginalType18;
+        bool swordThrow = payload.collisionKind == TestPlayAttackCollisionKind.OriginalType31;
+        int modelType = payload.collisionKind == TestPlayAttackCollisionKind.OriginalType5 ? 5 :
+            payload.collisionKind == TestPlayAttackCollisionKind.OriginalType29 ? 29 :
+            payload.collisionKind == TestPlayAttackCollisionKind.OriginalType32 ? 32 :
+            payload.collisionKind == TestPlayAttackCollisionKind.OriginalType33 ? 33 : 0;
+        bool modelOnly = swordThrow || modelType != 0;
         if (weaponPoint?.BoneTr == null)
             return;
 
@@ -4904,35 +5964,96 @@ public class TestPlayController : MonoBehaviour
         // from a valid lock so an unlocked shot keeps the WEAPONPOINT direction.
         Transform guidanceTarget = GetLockedTargetTransform();
         bool targetLinked = guidanceTarget != null;
+        if (modelCannon)
+            targetLinked = TestPlayCombatCore.ResolveOriginalType18TargetLink(targetLinked,
+                OriginalCannonGuidanceSuppressed, args.Count > 5 ? args[5].AsInt() : 0);
+        if ((swordThrow || modelType == 29) && OriginalCannonGuidanceSuppressed) targetLinked = false;
         Vector3 spawnPosition = weaponPoint.BoneTr.position;
-        Quaternion spawnRotation = Quaternion.LookRotation(
+        Quaternion muzzleRotation = Quaternion.LookRotation(
             weaponPoint.WorldForward,
             weaponPoint.BoneTr.up);
+        Vector3 aimPosition = guidanceTarget != null ? guidanceTarget.position : Vector3.zero;
+        if (targetLinked && session != null && session.TryGet(sessionLock, out var targetSnapshot))
+        {
+            // The session root is at the feet, while the original type-1 target
+            // point represents the character body. Aim at the frozen collider
+            // centre so distance does not amplify a small upward muzzle offset.
+            // Collider selection is a Unity adapter; the 20-degree initial aim
+            // gate itself is the original FUN_004e8310/FUN_0055fb50 behaviour.
+            aimPosition = (targetSnapshot.ShotCapsuleStart + targetSnapshot.ShotCapsuleEnd) * 0.5f;
+        }
+        Quaternion spawnRotation = TestPlayCombatCore.ResolveOriginalType1InitialRotation(
+            muzzleRotation,
+            spawnPosition,
+            targetLinked,
+            aimPosition);
         float targetDistance = targetLinked
-            ? Vector3.Distance(spawnPosition, guidanceTarget.position)
+            ? Vector3.Distance(spawnPosition, aimPosition)
             : TestPlayCombatCore.OriginalType1HomingDistance;
         float homingTurnDegrees = targetLinked
             ? TestPlayCombatCore.ResolveOriginalType1HomingTurnDegrees(
                 targetDistance,
                 parameters.homingPercent)
             : 0f;
+        if (shot.bullet && targetLinked)
+            homingTurnDegrees = TestPlayCombatCore.ResolveOriginalType6HomingTurnDegrees(
+                targetDistance, parameters.homingPercent);
+        if (type11)
+        {
+            int seed = unchecked(++type11ShotSequence * 397 ^ tick * 7919 ^ sessionMech.MechId);
+            spawnRotation = TestPlayCombatCore.ResolveOriginalType11InitialRotation(
+                muzzleRotation, spawnPosition, targetLinked, aimPosition,
+                new Vector3(SampleHinokoSigned(seed, 0), SampleHinokoSigned(seed, 1), SampleHinokoSigned(seed, 2)));
+            homingTurnDegrees = targetLinked ? .1f : 0f;
+        }
 
         // Original EXE registers shot.wav as fixed Snd(0), but its type-1
         // handler also emits a spatial sound directly after creating LZ_Beam.
         // This is a Unity adapter pending a smaller primary-source proof: keep
         // the fixed Snd(0) mapping rather than guessing another weapon sound.
+        if (cannon) homingTurnDegrees = 0f;
+        if (swordThrow) homingTurnDegrees = targetLinked ? TestPlayCombatCore.ResolveOriginalType31Homing(targetDistance) : 0;
+        if (modelCannon)
+        {
+            homingTurnDegrees = targetLinked ? TestPlayCombatCore.ResolveOriginalType18Homing(targetDistance) : 0f;
+            int spread = args.Count > 6 ? Mathf.Max(0, args[6].AsInt()) : 0;
+            var random = new System.Random(unchecked(++type11ShotSequence * 397 ^ tick * 7919 ^ sessionMech.MechId));
+            int Sample() => (int)System.Math.Floor(random.NextDouble() * (2.0 * spread + 1) - spread);
+            spawnRotation = TestPlayCombatCore.ResolveOriginalType18Scatter(spawnRotation, spread, Sample(), Sample());
+        }
+        if (modelType == 29) homingTurnDegrees = targetLinked && targetDistance < 100 ? (1-targetDistance/100)*.75f : 0;
+        if (modelType == 5 || modelType == 32 || modelType == 33) spawnRotation = weaponPoint.BoneTr.rotation;
+        int shotSoundId = cannon ? 3 : shot.bullet ? 13 : 0;
         var shotSound = TestPlayPresentationCore.CreateSound(
-            new List<TestPlayScriptValue> { TestPlayScriptValue.Number(0f) },
+            new List<TestPlayScriptValue> { TestPlayScriptValue.Number(shotSoundId) },
             presentationRuntime != null
-                ? presentationRuntime.ResolveAudioAdapter(TestPlayPresentationEventType.Sound, "0")
+                ? presentationRuntime.ResolveAudioAdapter(TestPlayPresentationEventType.Sound, shotSoundId.ToString())
                 : TestPlayPresentationAdapterKind.None);
         shotSound.evidence = TestPlayPresentationEvidence.UnityAlternative;
-        shotSound.source = "Type1Projectile";
-        shotSound.diagnostic = "Unity adapter: type-1 launch uses Snd(0); original spatial sound identity is unconfirmed.";
-        RaisePresentationEvent(shotSound);
-        RaiseRuntimeEvent(TestPlayRuntimeEventType.Sound, "Snd", new List<TestPlayScriptValue> {
-            TestPlayScriptValue.Number(0f)
-        }, "0");
+        shotSound.source = cannon ? (modelCannon ? "Type18Projectile" : penetratingCannon ? "Type26Projectile" : "Type9Projectile") : type11 ? "Type11Projectile" : shot.bullet ? "Type6Projectile" : "Type1Projectile";
+        shotSound.diagnostic = cannon ? "Canon/Canon2 handler sound slot 3 (explode_m.wav); Unity audio adapter." : shot.bullet
+            ? "LZ_Bullet handler sound slot 13 (bullet.wav); Unity audio adapter."
+            : "Unity adapter: type-1 launch uses Snd(0); original spatial sound identity is unconfirmed.";
+        if (!modelOnly) // type31 handler has no launch sound; real ANI owns Snd(10).
+        {
+            RaisePresentationEvent(shotSound);
+            RaiseRuntimeEvent(TestPlayRuntimeEventType.Sound, "Snd", new List<TestPlayScriptValue> {
+                TestPlayScriptValue.Number(shotSoundId)
+            }, shotSoundId.ToString());
+        }
+        if (cannon) SpawnCannonPuff(spawnPosition, true, penetratingCannon);
+        if (shot.bullet && !type11 && !cannon && !modelOnly && presentationRuntime != null)
+        {
+            // FUN_004ea9f0 uses raw texture 22 (summon.png) at the muzzle.
+            // Billboard size/lifetime in world units is a Unity presentation adapter.
+            var flash = presentationRuntime.CreateOriginalNamedTextureEffect("summon.png",
+                spawnPosition, spawnRotation, Vector2.one * 0.2f, 0f, Color.white);
+            if (flash != null)
+            {
+                flash.GetComponent<TestPlayOriginalEffect>()?.UseRadialGradient();
+                RegisterSessionCombatEffect(flash, 4, false);
+            }
+        }
 
         GameObject go = presentationRuntime != null
             ? presentationRuntime.CreateMappedEffect(source, spawnPosition, spawnRotation)
@@ -4957,17 +6078,17 @@ public class TestPlayController : MonoBehaviour
         }
         if (go == null)
         {
-            go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            visualAdapter = TestPlayPresentationAdapterKind.PrimitiveFallback;
+            go = modelOnly ? new GameObject("SwordThrow") : GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            visualAdapter = modelOnly ? TestPlayPresentationAdapterKind.None : TestPlayPresentationAdapterKind.PrimitiveFallback;
         }
 
-        RaisePresentationEvent(TestPlayPresentationCore.CreateVisual(
+        if (!modelOnly) RaisePresentationEvent(TestPlayPresentationCore.CreateVisual(
             source,
             parameters.textureId,
             visualAdapter));
         go.name = "TestPlayProjectile_" + source;
         go.transform.SetPositionAndRotation(spawnPosition, spawnRotation);
-        if (!mappedEffect)
+        if (!mappedEffect && !modelOnly)
             go.transform.localScale = Vector3.one * projectileRadius;
 
         TestPlayProjectile projectile = go.GetComponent<TestPlayProjectile>();
@@ -4987,6 +6108,37 @@ public class TestPlayController : MonoBehaviour
         projectile.sourceCommand = payload.source;
         projectile.valueSource = payload.valueSource;
         projectile.ConfigureOriginalType1(parameters, targetLinked, homingTurnDegrees);
+        if (modelCannon)
+        {
+            projectile.originalModelSlot = args.Count > 4 ? args[4].AsInt() : 0;
+            AttachCannonModel(go.transform, projectile.originalModelSlot);
+        }
+        if (swordThrow)
+        {
+            projectile.originalModelSlot = args.Count > 4 ? args[4].AsInt() : 0;
+            var model = AttachCannonModel(go.transform, projectile.originalModelSlot);
+            if (model != null) model.name = "Type31Model_" + projectile.originalModelSlot;
+            var modelPoint = RuntimeSptData.WeaponPoints[args.Count > 5 ? args[5].AsInt() : 0].BoneTr;
+            projectile.ConfigureOriginalType31(model != null ? model.transform : null,
+                modelPoint.rotation, modelPoint.position);
+            var visual = TestPlayPresentationCore.CreateVisual(source, -1,
+                model != null ? TestPlayPresentationAdapterKind.MappedPrefab : TestPlayPresentationAdapterKind.None);
+            visual.diagnostic = "Original LoadXFile slot model; Unity imported mesh/material adapter.";
+            RaisePresentationEvent(visual);
+        }
+        if (modelType != 0)
+        {
+            projectile.originalModelSlot = args.Count > 4 ? args[4].AsInt() : 0;
+            var model = AttachCannonModel(go.transform, projectile.originalModelSlot);
+            if (model != null) model.name = "Type" + modelType + "Model_" + projectile.originalModelSlot;
+            var modelSource = modelType == 29 ? RuntimeSptData.WeaponPoints[args.Count > 5 ? args[5].AsInt() : 0].BoneTr : weaponPoint.BoneTr;
+            projectile.gameObject.AddComponent<TestPlayModelAttack>().Configure(projectile, modelType,
+                model != null ? model.transform : null, modelSource, args.Count > 5 ? args[5].AsInt() : 0,
+                unchecked(++type11ShotSequence * 397 ^ tick * 7919 ^ sessionMech.MechId));
+            var visual = TestPlayPresentationCore.CreateVisual(source,-1,model != null ? TestPlayPresentationAdapterKind.MappedPrefab : TestPlayPresentationAdapterKind.None);
+            visual.diagnostic = "Original model attack; Unity imported mesh/material and seeded random adapter.";
+            RaisePresentationEvent(visual);
+        }
         session?.RegisterProjectile(projectile, sessionMech, sessionLock);
         spawnedTransientObjects.Add(go);
         RecordCombatEvent(new TestPlayCombatTraceEvent
@@ -5010,11 +6162,172 @@ public class TestPlayController : MonoBehaviour
             parameters.distancePerTick);
     }
 
+    // Original +bbc state is separate from acquiring a target. Its external state
+    // writer remains an adapter boundary; default matches original initialization.
+    public bool OriginalCannonGuidanceSuppressed { get; set; }
+    readonly Dictionary<int, TestPlayExternalModel> cannonModels = new Dictionary<int, TestPlayExternalModel>();
+
+    GameObject AttachCannonModel(Transform projectile, int slot)
+    {
+        if (slot < 0) return null;
+        if (RuntimeSptData == null || !RuntimeSptData.ExternalModels.TryGetValue(slot, out var definition) || robo == null)
+        {
+            LogUnhandled("Attack model slot " + slot + " is not loaded.");
+            return null;
+        }
+        if (!cannonModels.TryGetValue(slot, out var model) || model == null)
+        {
+            var container = new GameObject("TestPlayModelSlot_" + slot);
+            container.transform.SetParent(transform, false);
+            spawnedTransientObjects.Add(container);
+            model = container.AddComponent<TestPlayExternalModel>();
+            model.Load(robo, definition);
+            cannonModels[slot] = model;
+        }
+        return model.CreateInstance(projectile);
+    }
+
+    internal void SpawnSwordThrowFlightEffect(Vector3 position, int procType = 31)
+    {
+        if (presentationRuntime == null) return;
+        // FUN_0047edc0 raw32: one magic effect each flying tick. Random scale/growth
+        // and DX9 blending remain the shared Unity effect adapter.
+        var effect = presentationRuntime.CreateOriginalNamedTextureEffect("magic.png", position,
+            Quaternion.identity, Vector2.one * .1f, 0, Color.white);
+        if (effect != null) { effect.name = "Type" + procType + "_Flight"; RegisterSessionCombatEffect(effect, 22, false); }
+    }
+
+    internal void SpawnSwordThrowEffect(Vector3 position, bool ending, bool guard = false, bool terrain = false, int procType = 31)
+    {
+        if (procType == 32 && !ending && !guard && !terrain)
+            ResolvePresentationCamera()?.RequestOriginalSwordContactShake(position);
+        if (presentationRuntime == null) return;
+        // FUN_00480320/00480f50: 20+20 Beam6 sparks; 0047edc0 stage999:10 magic.
+        // Unity seeded scatter; moving Tiri2 use their own session-tick lifetime.
+        // Ending/guard compositions retain the A5 billboard adapter.
+        var root = new GameObject("Type" + procType + (ending ? "_End" : guard ? "_Guard" : "_Impact"));
+        root.transform.position = position;
+        int count = ending ? 10 : guard ? 6 : procType == 29 ? 60 : 40;
+        var contact = !ending && !guard ? root.AddComponent<TestPlayContactEffect>() : null;
+        if (terrain || (procType == 29 && !guard && !ending))
+        {
+            if(contact != null) contact.Add(presentationRuntime,"beam3Hit.png",position,Vector2.one,Vector3.zero,TestPlayContactEffect.Motion.Flash);
+            else AddSessionTextureLayer(root.transform,"beam3Hit.png",position,Vector2.one,Color.white);
+        }
+        for (int i=0;i<count;i++)
+        {
+            Vector3 offset = new Vector3(SampleHinokoSigned(i+1,0),SampleHinokoSigned(i+1,1),SampleHinokoSigned(i+1,2))*.3f;
+            if (contact != null)
+                contact.Add(presentationRuntime,"Beam6.png",position,new Vector2(.02f,.1f),offset,TestPlayContactEffect.Motion.Debris);
+            else
+                AddSessionTextureLayer(root.transform, ending ? "magic.png" : (i == 0 ? "summon.png" : "beam3Hit.png"),
+                    position+offset, Vector2.one*(ending ? .5f : .12f),Color.white);
+        }
+        RegisterSessionCombatEffect(root,ending ? 64 : 32,false);
+        if (!ending)
+        {
+            var args = new List<TestPlayScriptValue> { TestPlayScriptValue.Number(7) };
+            var sound = TestPlayPresentationCore.CreateSound(args,
+                presentationRuntime.ResolveAudioAdapter(TestPlayPresentationEventType.Sound,"7"));
+            sound.source = "Type" + procType + "Impact";
+            sound.evidence = TestPlayPresentationEvidence.UnityAlternative;
+            sound.diagnostic = "Original contact slot7; Unity audio adapter.";
+            RaisePresentationEvent(sound);
+            RaiseRuntimeEvent(TestPlayRuntimeEventType.Sound,"Snd",args,"7");
+        }
+    }
+
+    internal void SpawnFunnelFlightEffect(Vector3 position)
+    {
+        if (presentationRuntime == null) return;
+        // FUN_0046fc40 raw8/raw9, every fourth tick; Unity billboard/lifetime adapter.
+        var root = new GameObject("Type5_Flight");
+        root.transform.position = position;
+        AddSessionTextureLayer(root.transform,"burner2.png",position,Vector2.one*.35f,new Color(1,1,1,.5f));
+        AddSessionTextureLayer(root.transform,"beamHit3.png",position,Vector2.one*.2f,Color.white);
+        RegisterSessionCombatEffect(root,8,false);
+    }
+
+    internal TestPlayProjectile SpawnFunnelChild(TestPlayProjectile parent, int mode)
+    {
+        // FUN_0046fc40 normal charge: p5 byte0=LZ_Beam, byte1=LZ_HiLaser2.
+        // Other byte values intentionally emit only the original sound, not a guessed attack.
+        mode = unchecked((byte)mode);
+        var soundArgs = new List<TestPlayScriptValue> { TestPlayScriptValue.Number(0) };
+        if (presentationRuntime != null)
+        {
+            var sound = TestPlayPresentationCore.CreateSound(soundArgs,presentationRuntime.ResolveAudioAdapter(TestPlayPresentationEventType.Sound,"0"));
+            sound.source="Type5Child"; RaisePresentationEvent(sound);
+        }
+        RaiseRuntimeEvent(TestPlayRuntimeEventType.Sound,"Snd",soundArgs,"0");
+        if (mode != 0 && mode != 1) return null;
+        var parameters = new TestPlayType1ProjectileParameters { weaponPointId=parent.weaponPointId,
+            distancePerTick=mode==0?.7f:.8f, visualWidth=mode==0?.15f:.28f, trailPointCount=mode==0?30:200,
+            activeTicks=mode==0?300:60, textureId=mode==0?0:30 };
+        var go = presentationRuntime != null ? presentationRuntime.CreateOriginalType1TrailEffect(parameters.textureId,
+            parent.transform.position,parameters.visualWidth,out _) : null;
+        if(go==null)go=new GameObject("Type5Child");
+        go.name="Type5Child_"+(mode==0?"Beam":"HiLaser2");
+        go.transform.SetPositionAndRotation(parent.transform.position,parent.transform.rotation);
+        var shot=go.AddComponent<TestPlayProjectile>();shot.owner=this;shot.target=parent.target;
+        shot.damage=mode==0?40:5;shot.downValue=mode==0?40:11;shot.horizontalImpactForce=mode==0?.02f:0;
+        shot.attackFlag=2;shot.collisionKind=TestPlayAttackCollisionKind.OriginalType1;
+        shot.sourceCommand=go.name;shot.valueSource=TestPlayCombatValueSource.OriginalScriptProfile;
+        shot.ConfigureOriginalType1(parameters,false,0);shot.EndWhenOwnerLost=true;
+        if(mode==1)go.AddComponent<TestPlayModelAttack>().ConfigureHiLaser(shot);
+        session?.RegisterProjectile(shot,sessionMech,parent.ModelGuidance);
+        spawnedTransientObjects.Add(go);
+        RaiseRuntimeEvent(TestPlayRuntimeEventType.WeaponSpawned,go.name,null,"FannelChild",parameters.activeTicks,parameters.distancePerTick);
+        return shot;
+    }
+
+    internal void SpawnCannonPuff(Vector3 position, bool muzzle, bool penetrating = false)
+    {
+        if (presentationRuntime == null) return;
+        // Raw texture36 Bomb; original muzzle: size1 / +.3 / alpha-24.
+        // Periodic .3 trail puffs use the same asset. Quad growth/fade is a Unity adapter.
+        var effect = presentationRuntime.CreateOriginalNamedTextureEffect("Bomb.png", position,
+            Quaternion.identity, Vector2.one * (muzzle ? 1f : .3f), 0, Color.white);
+        if (effect != null) { effect.name = (penetrating ? "Type26_" : "Type9_") + (muzzle ? "Muzzle" : "Puff"); RegisterSessionCombatEffect(effect, 11, false); }
+    }
+
+    internal void SpawnCannonImpact(Vector3 position, Vector3 direction, bool terrain, bool penetrating = false)
+    {
+        // Shared by Canon/Canon2/FireBall contact; no extra shake on generic hit effects.
+        ResolvePresentationCamera()?.RequestOriginalCannonShake(position);
+        if (presentationRuntime == null) return;
+        // FUN_00468c40: one central + eight forward BB_Explode5 visuals, NOT AOE attacks.
+        // Terrain callback FUN_00469260: five explode1 layers. Deterministic spread,
+        // sizes and shared sheet animation are Unity composition, not DX9 render parity.
+        // Canon2 FUN_004698c0/00469ea0: one central + four smaller backward layers.
+        // Counts/assets are original; offsets/scales/sheet animation remain a Unity adapter.
+        var root = new GameObject((penetrating ? "Type26_" : "Type9_") + (terrain ? "TerrainExplosion" : "ImpactExplosion"));
+        root.transform.position = position;
+        int count = penetrating || terrain ? 5 : 9;
+        for (int i = 0; i < count; i++)
+        {
+            Vector3 spread = new Vector3(SampleHinokoSigned(i+1,0), SampleHinokoSigned(i+1,1), SampleHinokoSigned(i+1,2));
+            Vector3 offset = i == 0 ? Vector3.zero : spread * .25f + direction * ((penetrating ? -.08f : .08f)*i);
+            float size = penetrating ? (i==0 ? 1f : .5f) : (i==0 ? 2f : 1f);
+            AddSessionTextureLayer(root.transform, "explode1.png", position + offset, Vector2.one * size, Color.white);
+        }
+        RegisterSessionCombatEffect(root,18,false);
+        var args = new List<TestPlayScriptValue> { TestPlayScriptValue.Number(3) };
+        var sound = TestPlayPresentationCore.CreateSound(args,
+            presentationRuntime.ResolveAudioAdapter(TestPlayPresentationEventType.Sound,"3"));
+        sound.source = penetrating ? "Type26Impact" : "Type9Impact";
+        sound.hasWorldPosition = true; sound.worldPosition = position;
+        sound.evidence = TestPlayPresentationEvidence.UnityAlternative;
+        sound.diagnostic = "Original explode_m.wav slot3; Unity spatial/audio adapter.";
+        RaisePresentationEvent(sound);
+        RaiseRuntimeEvent(TestPlayRuntimeEventType.Sound,"Snd",args,"3");
+    }
+
     void SpawnMeleeAttack(List<TestPlayScriptValue> args, string source, float fallbackDamage)
     {
         // FUN_004fa150: [2]=WEAPONPOINT, [3]/100=長さ, [5]=攻防双方のhit-stop、
         // [6]=対象別再命中interval、[11]=存続tick。
-        // FUN_00502e60はATTACKテーブルを生成時に複製する。
+        // FUN_00502e60はSetExtParamテーブルを生成時に複製する。
         if (args == null || args.Count < 12 || RuntimeSptData == null)
         {
             LogUnhandled(source + " requires the original 12 arguments and parsed Script.spt WEAPONPOINT data.");
@@ -5042,6 +6355,7 @@ public class TestPlayController : MonoBehaviour
             weaponPoint.WorldForward,
             source,
             attackFlag));
+        activeMeleeAttacks[activeMeleeAttacks.Count - 1].contactParameters = (int[])contactParameters.Clone();
         if (session != null)
             activeMeleeAttacks[activeMeleeAttacks.Count - 1].SessionAttackId = session.AllocateAttackId(sessionMech);
     }
@@ -5123,6 +6437,8 @@ public class TestPlayController : MonoBehaviour
             foreach (var candidate in sessionMeleeHits)
             {
                 var hit = TestPlayCombatCore.CreateHitResult(attack.payload, candidate.Position - tickResult.currentOrigin);
+                hit.contactParameters = attack.contactParameters;
+                hit.damage *= 1 + ActionMeleeBonus * .01f;
                 if (!session.ResolveHit(attack.SessionAttackId, sessionMech, candidate.Handle, hit,
                     attackerPosition, true, attack.HitStopTicks, out hit)) continue;
                 ApplyMeleeDefenseFeedback(hit);
@@ -5150,13 +6466,13 @@ public class TestPlayController : MonoBehaviour
             velocity += target.transform.forward * 0.05f;
     }
 
-    void SpawnSessionHitEffect(bool melee, Vector3 attackerPosition, TestPlayTargetSnapshot snapshot)
+    void SpawnSessionHitEffect(bool melee, Vector3 attackerPosition, TestPlayTargetSnapshot snapshot, bool bullet = false, int[] parameters = null)
     {
         if (presentationRuntime == null || robo == null || robo.root == null)
             return;
 
-        string key = melee ? "CombatHit:Melee" : "CombatHit:Shot";
-        string textureName = melee ? "explode2.png" : "beamHit3.png";
+        string key = bullet ? "CombatHit:Bullet" : melee ? "CombatHit:Melee" : "CombatHit:Shot";
+        string textureName = bullet ? "explode2.png" : melee ? "beamHit2.png" : "beamHit3.png";
         Vector3 center;
         float modelRadius;
         GetSessionPresentationBounds(snapshot.Position, snapshot.Radius, out center, out modelRadius);
@@ -5164,7 +6480,6 @@ public class TestPlayController : MonoBehaviour
         if (towardSource.sqrMagnitude < 0.000001f)
             towardSource = -(snapshot.Rotation * Vector3.forward);
         Vector3 position = center + towardSource.normalized * Mathf.Min(modelRadius * (melee ? 0.45f : 0.85f), 1.2f);
-        float size = Mathf.Clamp(modelRadius * (melee ? 1.15f : 1.6f), 0.6f, melee ? 2.5f : 3.5f);
         if (!melee && (snapshot.ShotCapsuleEnd - snapshot.ShotCapsuleStart).sqrMagnitude > 0f)
         {
             center = (snapshot.ShotCapsuleStart + snapshot.ShotCapsuleEnd) * 0.5f;
@@ -5173,67 +6488,19 @@ public class TestPlayController : MonoBehaviour
             position = center + towardSource.normalized * (snapshot.ShotCapsuleRadius + 0.15f);
         }
 
-        GameObject root = presentationRuntime.CreateMappedEffect(key, position, Quaternion.identity);
-        TestPlayPresentationAdapterKind adapter = root != null
-            ? TestPlayPresentationAdapterKind.MappedPrefab
-            : TestPlayPresentationAdapterKind.None;
-        if (root == null)
-        {
-            root = new GameObject("TestPlaySessionHitEffect_" + (melee ? "Melee" : "Shot"));
-            root.transform.position = position;
-            GameObject layer = presentationRuntime.CreateOriginalNamedTextureEffect(
-                textureName,
-                position,
-                Quaternion.identity,
-                Vector2.one * size,
-                0f,
-                Color.white);
-            if (layer == null)
-            {
-                DestroyRuntimeObject(root);
-                root = CreateSessionPrimitiveEffect(position, size, "TestPlaySessionHitFallback");
-                adapter = TestPlayPresentationAdapterKind.PrimitiveFallback;
-            }
-            else
-            {
-                layer.transform.SetParent(root.transform, true);
-                adapter = TestPlayPresentationAdapterKind.OriginalTextureQuad;
-            }
-            if (!melee && adapter == TestPlayPresentationAdapterKind.OriginalTextureQuad)
-            {
-                // Unity composition using original assets: the ring alone has
-                // an empty center and weak contrast. Add a brief impact flash.
-                AddSessionTextureLayer(root.transform, "beamHit2.png", position,
-                    Vector2.one * size, Color.white);
-                // Unity burst composition: deterministic directions, no shared Random state.
-                Quaternion spread = Quaternion.LookRotation(towardSource.normalized);
-                for (int spark = 0; spark < 16; spark++)
-                {
-                    float angle = spark * 2.39996323f;
-                    float depth = 0.15f + 0.65f * ((spark % 5) / 4f);
-                    float radial = Mathf.Sqrt(1f - depth * depth);
-                    Vector3 direction = spread * new Vector3(Mathf.Cos(angle) * radial, Mathf.Sin(angle) * radial, depth);
-                    GameObject shard = presentationRuntime.CreateOriginalNamedTextureEffect(
-                        "beamHit2.png", position + direction * 0.12f, Quaternion.identity,
-                        new Vector2(size * 0.075f, size * (spark % 3 == 0 ? 0.65f : 0.4f)),
-                        0f, spark % 3 == 0 ? Color.white : new Color(1f, 0.72f, 0.25f, 1f));
-                    if (shard == null) continue;
-                    shard.name = "TestPlayShotSpark_" + spark;
-                    shard.transform.SetParent(root.transform, true);
-                    shard.GetComponent<TestPlayOriginalEffect>().billboardAxis = direction * (4f + spark % 4);
-                }
-            }
-        }
-
-        int effectTicks = melee ? SessionHitEffectTicks : 30;
-        RegisterSessionCombatEffect(root, effectTicks, false, !melee);
+        // Contact class selects its own composition. Position remains the existing
+        // capsule/model adapter; never rerun collision or create damaging children.
+        GameObject root = melee && parameters != null
+            ? CreateMeleeContact(position, parameters) : CreateContactBurst(position, bullet, melee);
+        var adapter = root != null ? TestPlayPresentationAdapterKind.OriginalTextureQuad : TestPlayPresentationAdapterKind.None;
+        int effectTicks = 32;
         SessionHitEffectSpawnCount++;
         RaisePresentationEvent(TestPlayPresentationCore.CreateVisual(
             key,
             -1,
             adapter,
             TestPlayPresentationEvidence.UnityAlternative,
-            "OriginalHitEffectSelectionUnknown;UnityImpactPointApproximation"));
+            "OriginalContactParticleCountsAndTickMotion;UnityImpactPointAndBillboard"));
         RaiseRuntimeEvent(TestPlayRuntimeEventType.EffectSpawned, key, null, textureName, 0,
             effectTicks / 60f);
     }
@@ -5275,9 +6542,7 @@ public class TestPlayController : MonoBehaviour
             }
             if (!created)
             {
-                DestroyRuntimeObject(root);
-                root = CreateSessionPrimitiveEffect(center, size, "TestPlaySessionDefeatFallback");
-                adapter = TestPlayPresentationAdapterKind.PrimitiveFallback;
+                adapter = TestPlayPresentationAdapterKind.None;
             }
             else
                 adapter = TestPlayPresentationAdapterKind.OriginalTextureQuad;
@@ -5304,6 +6569,8 @@ public class TestPlayController : MonoBehaviour
             return false;
         layer.name = "TestPlaySessionEffectLayer_" + textureName;
         layer.transform.SetParent(parent, true);
+        if (textureName == "GSmoke.png" || textureName == "smoke.png")
+            layer.GetComponent<TestPlayOriginalEffect>().UseAlphaBlend();
         return true;
     }
 
@@ -5355,8 +6622,20 @@ public class TestPlayController : MonoBehaviour
         spawnedTransientObjects.Add(root);
     }
 
+    int sessionDefeatCameraTicks = -1;
+
     void TickSessionCombatEffects()
     {
+        // Original 00437d80 resets the death counter; 004bf8a0 increments it
+        // independently of action16/landing and requests shake only at31.
+        // Unity adapter: count existing presentation ticks after the session's
+        // first defeat transition. Keep the accepted 60-tick visual stack intact.
+        if (sessionDefeatCameraTicks >= 0 && ++sessionDefeatCameraTicks == 31)
+        {
+            sessionDefeatCameraTicks = -1;
+            if (robo?.root != null)
+                ResolvePresentationCamera()?.RequestOriginalDefeatShake(robo.root.transform.position);
+        }
         for (int i = activeSessionCombatEffects.Count - 1; i >= 0; i--)
         {
             ActiveSessionCombatEffect active = activeSessionCombatEffects[i];
@@ -5366,6 +6645,13 @@ public class TestPlayController : MonoBehaviour
                 continue;
             }
 
+            var contact = active.visualRoot.GetComponent<TestPlayContactEffect>();
+            if (contact != null)
+            {
+                contact.Tick();
+                if (!contact.IsAlive) RemoveSessionCombatEffectAt(i, active.defeat);
+                continue;
+            }
             active.elapsedTicks++;
             float progress = Mathf.Clamp01(active.elapsedTicks / (float)active.totalTicks);
             float growth = active.defeat
@@ -5421,7 +6707,14 @@ public class TestPlayController : MonoBehaviour
     {
         if (layer == null || layer.sourceTexture == null)
             return;
-        string textureName = layer.sourceTexture.name;
+        // External textures retain their filename extension; imported textures may not.
+        string textureName = System.IO.Path.GetFileNameWithoutExtension(layer.sourceTexture.name);
+        if (textureName.EndsWith("Bomb") && (layer.gameObject.name.StartsWith("Type9_") || layer.gameObject.name.StartsWith("Type26_")))
+        {
+            // Actual Bomb.png is a 4x4 sheet; sequence timing is a Unity adapter.
+            layer.SetSheetFrame(4,4,Mathf.Clamp(Mathf.FloorToInt(Mathf.Clamp01(progress)*16),0,15));
+            return;
+        }
         if (!textureName.EndsWith("explode1") && !textureName.EndsWith("explode2"))
             return;
         const int columns = 8;
@@ -5637,39 +6930,6 @@ public class TestPlayController : MonoBehaviour
         RaiseRuntimeEvent(TestPlayRuntimeEventType.WeaponSpawned, source, null, source, 0, payload.damage);
     }
 
-    bool TrySpawnOriginalSpecialEffect(List<TestPlayScriptValue> args, int subtype)
-    {
-        if (presentationRuntime == null || robo == null || robo.root == null)
-            return false;
-
-        string key = "RunProc2:62:" + subtype;
-        Vector3 basePosition = robo.root.transform.position - robo.root.transform.forward * 0.5f + Vector3.up;
-        switch (subtype)
-        {
-            case 4:
-            {
-                int textureId = Mathf.RoundToInt(GetArg(args, 7, -1f));
-                float thickness = Mathf.Clamp(Mathf.Abs(GetArg(args, 5, 10f)) * 0.1f, 0.1f, 5f);
-                return SpawnOriginalTextureEffect(key, textureId, basePosition, Vector2.one * thickness, 0.4f);
-            }
-            case 7:
-            {
-                int textureId = Mathf.RoundToInt(GetArg(args, 6, -1f));
-                float size = Mathf.Clamp(Mathf.Abs(GetArg(args, 5, 50f)) * 0.01f, 0.1f, 8f);
-                float life = Mathf.Clamp(Mathf.Abs(GetArg(args, 10, 30f)) * 0.02f, 0.1f, 5f);
-                return SpawnOriginalTextureEffect(key, textureId, basePosition, Vector2.one * size, life);
-            }
-            case 10:
-            {
-                float size = Mathf.Clamp(Mathf.Abs(GetArg(args, 5, 100f)) * 0.01f, 0.1f, 8f);
-                return SpawnOriginalTextureEffect(key, 35, basePosition, Vector2.one * size, 0.8f);
-            }
-            case 11:
-                return SpawnOriginalTextureEffect(key, 40, basePosition, Vector2.one * 0.35f, 0.4f);
-        }
-        return false;
-    }
-
     void SpawnOriginalSwordEffect(List<TestPlayScriptValue> args, string key)
     {
         if (!TestPlayPresentationCore.TryCreateOriginalSwordBeamParameters(
@@ -5750,6 +7010,11 @@ public class TestPlayController : MonoBehaviour
                 : TestPlayPresentationAdapterKind.None,
             TestPlayPresentationEvidence.OriginalExecutableConfirmed,
             lineLayerCreated ? "" : "OriginalLineTextureUnavailable"));
+    }
+
+    void TickSwordBeamPresentation()
+    {
+        foreach (var active in activeSwordBeams) active?.visual?.SampleOriginalTick();
     }
 
     void TickActiveSwordBeams()
@@ -6127,6 +7392,66 @@ public class TestPlayController : MonoBehaviour
             DestroyImmediate(visualRoot);
     }
 
+    void SpawnOriginalTiri2(List<TestPlayScriptValue> args, string key)
+    {
+        int count = Mathf.Max(0, args[4].AsInt());
+        if (count == 0) return;
+        int pointId = args[2].AsInt();
+        var data = RuntimeSptData;
+        if (data == null || !data.WeaponPoints.TryGetValue(pointId, out var point) ||
+            point == null || point.BoneTr == null)
+        {
+            LogUnhandled(key + " WEAPONPOINT " + pointId + " is not bound; BB_Tiri2 is not created.");
+            return;
+        }
+        Vector3 position = point.BoneTr.position;
+        int seed = unchecked(pointId * 397 ^ currentAnimationIndex * 7919 ^ tick * 104729 ^ activeTiri2Effects.Count);
+        for (int i = 0; i < count; i++)
+        {
+            // FUN_004fa830 uses independent world-axis +/-0.3 samples, not
+            // the weapon's rotation or p5/p6. The shared original RNG sequence
+            // is unavailable here; deterministic sampling is a Unity alternative.
+            Vector3 speed = new Vector3(SampleHinokoSigned(seed, i * 3),
+                SampleHinokoSigned(seed, i * 3 + 1), SampleHinokoSigned(seed, i * 3 + 2)) * .3f;
+            var go = presentationRuntime != null ? presentationRuntime.CreateOriginalNamedTextureEffect(
+                TestPlayTiri2Effect.TextureName, position, Quaternion.identity,
+                new Vector2(.02f, .1f), 0f, Color.white) : null;
+            bool hasVisual = go != null;
+            if (go == null) go = new GameObject("TestPlayTiri2_MissingTexture");
+            var collider = go.GetComponent<Collider>();
+            if (collider != null) collider.enabled = false; // deferred primitive collider removal in Play
+            go.name = "TestPlayEffect_" + key + "_" + i;
+            go.transform.SetParent(transform, true);
+            var effect = go.AddComponent<TestPlayTiri2Effect>();
+            effect.Initialize(position, speed, tick);
+            activeTiri2Effects.Add(effect);
+            spawnedTransientObjects.Add(go);
+            if (hasVisual)
+                RaiseRuntimeEvent(TestPlayRuntimeEventType.EffectSpawned, key, args,
+                    TestPlayTiri2Effect.TextureName, TestPlayTiri2Effect.TextureId, 32f);
+        }
+        RaisePresentationEvent(TestPlayPresentationCore.CreateVisual(key, TestPlayTiri2Effect.TextureId,
+            presentationRuntime != null && presentationRuntime.HasOriginalNamedTexture(TestPlayTiri2Effect.TextureName)
+                ? TestPlayPresentationAdapterKind.OriginalTextureQuad : TestPlayPresentationAdapterKind.None,
+            TestPlayPresentationEvidence.UnityAlternative,
+            "OriginalTiri2ParametersAndLifecycle;UnityDeterministicRngAndProjectedBillboard"));
+    }
+
+    void TickActiveTiri2Effects()
+    {
+        for (int i = activeTiri2Effects.Count - 1; i >= 0; i--)
+        {
+            var effect = activeTiri2Effects[i];
+            // Use the owner's single clock; new effects first move next tick.
+            if (effect != null && (effect.BornTick == tick || effect.Advance())) continue;
+            activeTiri2Effects.RemoveAt(i);
+            if (effect == null) continue;
+            spawnedTransientObjects.Remove(effect.gameObject);
+            if (Application.isPlaying) Destroy(effect.gameObject);
+            else DestroyImmediate(effect.gameObject);
+        }
+    }
+
     void SpawnOriginalHinokoEffect(List<TestPlayScriptValue> args, string key)
     {
         if (!TestPlayPresentationCore.TryCreateOriginalHinokoParameters(
@@ -6314,6 +7639,15 @@ public class TestPlayController : MonoBehaviour
 
         TestPlayMagicShieldState state =
             TestPlayPresentationCore.CreateOriginalMagicShieldState(parameters);
+        bool mappedShield = visualRoot != null;
+        if (visualRoot == null)
+        {
+            visualRoot = new GameObject("MagicShieldModel");
+            visualRoot.transform.SetPositionAndRotation(weaponPoint.BoneTr.position, weaponPoint.BoneTr.rotation);
+            AttachCannonModel(visualRoot.transform, parameters.modelSlotIndex);
+        }
+        var modelOpacity = visualRoot.AddComponent<TestPlayEffectModel>();
+        modelOpacity.Initialize(); modelOpacity.SetOpacity(state.opacity);
         ActiveMagicShieldEffect active = new ActiveMagicShieldEffect
         {
             parameters = parameters,
@@ -6343,12 +7677,12 @@ public class TestPlayController : MonoBehaviour
         RaisePresentationEvent(TestPlayPresentationCore.CreateVisual(
             key,
             -1,
-            visualRoot != null
-                ? TestPlayPresentationAdapterKind.MappedPrefab
+            mappedShield || visualRoot.GetComponentInChildren<Renderer>() != null
+                ? mappedShield ? TestPlayPresentationAdapterKind.MappedPrefab : TestPlayPresentationAdapterKind.OriginalExternalModel
                 : TestPlayPresentationAdapterKind.None,
             TestPlayPresentationEvidence.OriginalExecutableConfirmed,
-            visualRoot != null
-                ? "OriginalLifecycleWithMappedModelSlotPrefab"
+            mappedShield ? "OriginalLifecycleWithMappedModelSlotPrefab" : visualRoot.GetComponentInChildren<Renderer>() != null
+                ? "OriginalLifecycleWithUnityModelOpacity"
                 : "OriginalModelSlotRenderingUnavailable"));
     }
 
@@ -6386,6 +7720,7 @@ public class TestPlayController : MonoBehaviour
                 active.visualRoot.transform.localScale = Vector3.Scale(
                     active.visualBaseScale,
                     Vector3.one * active.state.scale);
+                active.visualRoot.GetComponent<TestPlayEffectModel>()?.SetOpacity(active.state.opacity);
             }
         }
     }
@@ -6605,6 +7940,12 @@ public class TestPlayController : MonoBehaviour
     void ApplyBurners()
     {
         UpdatePropulsionLoopFromBurnerOutputs();
+        if (useOriginalBurnerTexture)
+        {
+            HideAllBurnerCones();
+            if (RuntimeSptData != null) foreach (var info in RuntimeSptData.BurnerSets.Values) if (info != null) StopParticleBurner(info);
+            return; // Normal original particles are emitted only by the 60 Hz clock.
+        }
 
         if (RuntimeSptData == null)
         {
@@ -6898,8 +8239,16 @@ public class TestPlayController : MonoBehaviour
 
     void ResetRuntimeFlags()
     {
+        type11ShotSequence = 0;
+        Array.Clear(contactParameters, 0, contactParameters.Length);
+        contactSequence = 0; DownSmokeSpawnCount = 0;
+        OriginalCannonGuidanceSuppressed = false;
+        auxiliaryEnergyDeltaPerTick = 0;
+        procDiagnosticWarnings.Clear();
         RestoreSessionModelVisibility();
         SessionDefeated = false;
+        sessionReactionScriptActive = sessionReactionBlockEntered = false;
+        sessionDefeatCameraTicks = -1;
         SessionReactionState = 0;
         SessionReactionPhase = TestPlaySessionReactionPhase.None;
         SessionAccumulatedDown = 0;
@@ -6932,6 +8281,7 @@ public class TestPlayController : MonoBehaviour
         meleeGuardFeedbackTicks = 0;
         swordCancelAction = -1;
         Array.Clear(attackCooldownTicks, 0, attackCooldownTicks.Length);
+        Array.Clear(attackCooldownDurations, 0, attackCooldownDurations.Length);
         attackSequenceActive = false;
         meleeApproachActive = false;
         meleeComboInputPending = false;
@@ -6969,6 +8319,7 @@ public class TestPlayController : MonoBehaviour
         groundRecoveryCompletedThisTick = false;
         groundedStationaryShotRecoveryPresentationRequested = false;
         presentStandingPoseDuringGroundedShotRecovery = false;
+        boostShotContinuation = null;
         deterministicGroundPlaneEnabled = false;
         stepSequenceActive = false;
         ClearStepRecovery();
@@ -7005,6 +8356,8 @@ public class TestPlayController : MonoBehaviour
         bodyDownAim.Reset();
         arm1Aim.Reset();
         arm2Aim.Reset();
+        foreach (var pose in type6BurstAimPoses) pose.Clear();
+        Array.Clear(visibleAimPoints, 0, visibleAimPoints.Length);
         subLRKey = 0f;
         bodyUpAimRequested = false;
         bodyDownAimRequested = false;
@@ -7037,13 +8390,18 @@ public class TestPlayController : MonoBehaviour
 
     void DestroyTransientObjects()
     {
+        groundSmoke.Clear(); normalBurners.Clear();
         activeSessionCombatEffects.Clear();
         activeSwordBeams.Clear();
         managedSwordBeam = null;
+        activeWindLineEffects.Clear();
+        activeWindRing2Effects.Clear();
         activeThunderEffects.Clear();
         activeWindRingSpecialEffects.Clear();
         activeBurnerBurstEffects.Clear();
         activeHinokoEffects.Clear();
+        activeTiri2Effects.Clear();
+        actionEffects.Clear();
         activeMagicShieldEffects.Clear();
         for (int i = 0; i < spawnedTransientObjects.Count; i++)
         {

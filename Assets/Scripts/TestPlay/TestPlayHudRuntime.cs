@@ -34,6 +34,9 @@ public class TestPlayHudRuntime : MonoBehaviour
 
     GameObject canvasObject;
     bool ownsCanvas;
+    RectTransform specialPanel;
+    readonly RectTransform[] specialFills = new RectTransform[3];
+    readonly Text[] specialValues = new Text[3];
     public GameObject OwnedCanvas => ownsCanvas ? canvasObject : null;
     bool hudVisible;
     float displayedHP = float.NaN;
@@ -71,6 +74,7 @@ public class TestPlayHudRuntime : MonoBehaviour
 
         hudVisible = true;
         canvasObject.SetActive(true);
+        EnsureSpecialGauges();
         mechaNameText.text = ResolveMechaName(controller);
         InvalidateDisplayedValues();
         RefreshHud();
@@ -109,6 +113,32 @@ public class TestPlayHudRuntime : MonoBehaviour
             controller.maximumAuxiliaryEnergy,
             ref displayedEnergy,
             ref displayedMaximumEnergy);
+        for (int i = 0; i < specialFills.Length; i++)
+        {
+            if (specialFills[i] == null) continue;
+            bool available = controller.HasSpecialAttack(i);
+            int remaining = controller.GetAttackCooldownTicks(i + 2);
+            specialFills[i].anchorMax = new Vector2(available ? controller.GetSpecialAttackRecovery(i) : 0f, 1f);
+            specialFills[i].offsetMax = Vector2.zero;
+            string label = !available ? "UEQ" : remaining <= 0 ? "READY" :
+                (remaining / 60f).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " SEC";
+            if (specialValues[i].text != label) specialValues[i].text = label;
+        }
+    }
+
+    void EnsureSpecialGauges()
+    {
+        if (specialPanel != null) return;
+        // Unity layout; recharge timing comes only from the executing ANI.
+        // Add to either the scene canvas or runtime canvas without changing the prefab.
+        specialPanel = CreateImage("SpecialAttackGauges", canvasObject.transform as RectTransform, panelColor).rectTransform;
+        SetAnchoredRect(specialPanel, new Vector2(1f, 0f), new Vector2(1f, 0f),
+            new Vector2(-screenMargin.x, screenMargin.y), new Vector2(350f, 156f));
+        string[] labels = { "SP-1A", "SP-2D", "SP-3F" };
+        Font resolvedFont = mechaNameText.font != null ? mechaNameText.font : ResolveFont();
+        for (int i = 0; i < labels.Length; i++)
+            CreateGaugeRow(specialPanel, labels[i], new Vector2(0f, (2 - i) / 3f),
+                new Vector2(1f, (3 - i) / 3f), energyColor, resolvedFont, out specialFills[i], out specialValues[i]);
     }
 
     void InvalidateDisplayedValues()
@@ -136,6 +166,11 @@ public class TestPlayHudRuntime : MonoBehaviour
 
     void OnDestroy()
     {
+        if (!ownsCanvas && specialPanel != null)
+        {
+            if (Application.isPlaying) Destroy(specialPanel.gameObject);
+            else DestroyImmediate(specialPanel.gameObject);
+        }
         if (!ownsCanvas || canvasObject == null)
             return;
 

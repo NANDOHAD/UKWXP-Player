@@ -13,6 +13,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
 {
     public const string SelectionScene = "Assets/Scenes/MechSelection.unity";
     public const string BattleScene = "Assets/Scenes/StandaloneTestPlay.unity";
+    const string DefaultRelativeDataRoot = "Windom_Data";
     const string DefaultRelativeMechsRoot = "Windom_Data\\Robo";
     // Retained public facade for existing Inspector/automation callers. Rebound on scene entry.
     public GameObject hudCanvas;
@@ -25,16 +26,35 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
     public bool IsReady { get; private set; }
     public bool LastOperationSucceeded { get; private set; }
     public string Message => message;
+    public string DataRoot => dataRoot;
     public string MechsRoot => mechsRoot;
     public IReadOnlyList<string> MechNames => mechNames;
+    public IReadOnlyList<TestPlayPilotData> Pilots => pilots;
+    public string PilotsRoot { get; private set; }
+    public string PilotMessage { get; private set; } = "";
+    public TestPlayPilotData FirstPilot => PilotAt(firstPilotIndex);
+    public TestPlayPilotData SecondPilot => PilotAt(secondPilotIndex);
+    readonly List<TestPlayPilotData> pilots = new List<TestPlayPilotData>();
+    int firstPilotIndex = -1, secondPilotIndex = -1;
     public int FirstIndex => firstIndex;
     public int SecondIndex => secondIndex;
     public TestPlaySessionBootstrap Host => host;
+    public TestPlayCpuSettings OpponentCpuSettings { get; private set; } = new TestPlayCpuSettings();
+    // Selection UI and programmatic callers share the same immutable session settings.
+    public void ConfigureOpponentCpu(TestPlayCpuSettings settings)
+    {
+        if (IsBusy || (host != null && host.Status == "Running"))
+            throw new InvalidOperationException("CPU設定は戦闘開始前に変更してください。");
+        OpponentCpuSettings = settings ?? throw new ArgumentNullException(nameof(settings));
+        selectionView?.RefreshSelection();
+    }
     public string Phase { get; private set; } = "初期化中";
     public bool CanCancel => IsBusy && cancellation != null && !cancellation.IsCancellationRequested && !quitting;
+    string dataRoot = "";
     string mechsRoot = "";
     readonly List<string> mechNames = new List<string>();
     readonly Dictionary<string, string> mechDisplayNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string, string> mechDescriptions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, Texture2D> selectionImages = new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
     int firstIndex, secondIndex;
     string message = "機体フォルダから自機と相手機を選んでください。";
@@ -44,6 +64,15 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
     bool quitting;
     CancellationTokenSource cancellation;
     Task operation;
+    public readonly List<TestPlayStageData> Maps = new List<TestPlayStageData>();
+    public readonly List<string> BgmFiles = new List<string>();
+    public int MapIndex { get; private set; } = -1;
+    public int BgmIndex { get; private set; } = -1;
+    public TestPlayStageData SelectedMap => MapIndex >= 0 && MapIndex < Maps.Count ? Maps[MapIndex] : null;
+    public string SelectedBgm => BgmIndex >= 0 && BgmIndex < BgmFiles.Count ? BgmFiles[BgmIndex] : null;
+    public string EnvironmentMessage { get; private set; } = "";
+    public TestPlayBgmPlayer Music { get; private set; }
+    public TestPlayStageRuntime Stage { get; private set; }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
     static void ResetInstance() { Instance = null; }
@@ -54,13 +83,29 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         if (Instance != null && Instance != this) { gameObject.SetActive(false); Destroy(gameObject); return; }
         Instance = this;
         DontDestroyOnLoad(gameObject);
+        Music = gameObject.AddComponent<TestPlayBgmPlayer>();
     }
 
     async void Start()
     {
         if (Instance != this) return;
         Application.runInBackground = true;
-        mechsRoot = Argument("--mechs-folder") ?? DefaultMechsRoot();
+        string explicitData = Argument("--data-folder");
+        string explicitMechs = Argument("--mechs-folder");
+        if (!string.IsNullOrEmpty(explicitData))
+        {
+            dataRoot = Path.GetFullPath(explicitData);
+            mechsRoot = explicitMechs != null ? Path.GetFullPath(explicitMechs) : Path.Combine(dataRoot, "Robo");
+        }
+        else if (!string.IsNullOrEmpty(explicitMechs))
+        {
+            ConfigureRoots(explicitMechs);
+        }
+        else
+        {
+            dataRoot = DefaultDataRoot();
+            mechsRoot = Path.Combine(dataRoot, "Robo");
+        }
         await ExecuteAsync(async token => {
             SetPhase("初期化中", false);
             if (!Application.isEditor && Application.platform == RuntimePlatform.WindowsPlayer &&
@@ -70,6 +115,8 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
             await LocalizationSettings.InitializationOperation.Task;
             token.ThrowIfCancellationRequested();
             RefreshMechList();
+            RefreshPilots();
+            RefreshEnvironment();
             string first = Argument("--mech");
             string output = Argument("--verify-output");
             string presentation = Argument("--verify-presentation-output");
@@ -109,6 +156,38 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         });
         if (!LastOperationSucceeded && (!string.IsNullOrEmpty(Argument("--verify-output")) || !string.IsNullOrEmpty(Argument("--verify-presentation-output"))) && !Application.isEditor)
             Application.Quit(1);
+        string cpuOutput = Argument("--verify-cpu-output");
+        if (!string.IsNullOrEmpty(cpuOutput))
+        {
+            try
+            {
+                await TestPlayCpuIntegrationVerification.RunAsync(cpuOutput);
+                if (!Application.isEditor) Application.Quit(TestPlayCpuIntegrationVerification.Current.state == "Succeeded" ? 0 : 1);
+            }
+            catch (Exception e) { Debug.LogException(e); if (!Application.isEditor) Application.Quit(1); }
+            return;
+        }
+        string integrationOutput = Argument("--verify-integration-output");
+        if (!string.IsNullOrEmpty(integrationOutput))
+        {
+            try
+            {
+                await TestPlayIntegrationPresentationVerification.StartVerification(integrationOutput);
+                if (!Application.isEditor) Application.Quit(TestPlayIntegrationPresentationVerification.Current.state == "Succeeded" ? 0 : 1);
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+                if (!Application.isEditor) Application.Quit(1);
+            }
+            return;
+        }
+        string movementOutput = Argument("--verify-movement-output");
+        if (!string.IsNullOrEmpty(movementOutput) && IsReady && !IsBusy)
+        {
+            await TestPlayMovementPresentationVerification.StartVerification(movementOutput);
+            if (!Application.isEditor) Application.Quit(TestPlayMovementPresentationVerification.Current.state == "Succeeded" ? 0 : 1);
+        }
         string uiOutput = Argument("--verify-ui-output");
         if (!string.IsNullOrEmpty(uiOutput) && IsReady && !IsBusy)
         {
@@ -127,10 +206,88 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
     public void RefreshCatalogue(string root)
     {
         if (IsBusy) return;
-        mechsRoot = root;
-        try { RefreshMechList(); }
+        ConfigureRoots(root);
+        try { Music.Stop(); RefreshMechList(); RefreshPilots(); RefreshEnvironment(); }
         catch (Exception e) { message = "機体一覧を読み込めません: " + e.Message; }
         selectionView?.Bind(this);
+    }
+
+    TestPlayPilotData PilotAt(int index) => index >= 0 && index < pilots.Count ? pilots[index] : null;
+
+    void RefreshEnvironment()
+    {
+        string map = SelectedMap?.DirectoryPath, bgm = SelectedBgm;
+        Maps.Clear(); BgmFiles.Clear(); MapIndex = BgmIndex = -1;
+        var diagnostics = new List<string>();
+        try
+        {
+            string root = !string.IsNullOrEmpty(dataRoot) ? dataRoot : DefaultDataRoot();
+            string mapRoot = Path.Combine(root, "Map"), musicRoot = Path.Combine(root, "Sound", "MyBGM");
+            if (Directory.Exists(mapRoot))
+            {
+                var folders = Directory.GetDirectories(mapRoot); Array.Sort(folders, StringComparer.OrdinalIgnoreCase);
+                foreach (string folder in folders)
+                {
+                    if (!File.Exists(Path.Combine(folder, "map.mpd"))) continue;
+                    try { Maps.Add(TestPlayStageData.Read(folder)); }
+                    catch (Exception e) { diagnostics.Add(Path.GetFileName(folder) + ": " + e.Message); }
+                }
+            }
+            if (Directory.Exists(musicRoot)) foreach (string file in Directory.GetFiles(musicRoot))
+            {
+                string extension = Path.GetExtension(file).ToLowerInvariant();
+                if (extension == ".ogg" || extension == ".wav" || extension == ".mp3") BgmFiles.Add(file);
+            }
+            BgmFiles.Sort(StringComparer.OrdinalIgnoreCase);
+            MapIndex = Maps.FindIndex(m => string.Equals(m.DirectoryPath, map, StringComparison.OrdinalIgnoreCase));
+            if (MapIndex < 0 && Maps.Count > 0) MapIndex = 0;
+            BgmIndex = BgmFiles.FindIndex(p => string.Equals(p, bgm, StringComparison.OrdinalIgnoreCase));
+            EnvironmentMessage = Maps.Count + "マップ ／ " + BgmFiles.Count + "曲";
+            if (diagnostics.Count > 0) EnvironmentMessage += "\n" + string.Join("\n", diagnostics);
+        }
+        catch (Exception e) { EnvironmentMessage = "マップ・BGM一覧を読み込めません: " + e.Message; }
+    }
+    public void SelectMap(int index)
+    { if (IsBusy || index < 0 || index >= Maps.Count) return; MapIndex = index; selectionView?.RefreshSelection(); }
+    public void SelectBgm(int index)
+    { if (IsBusy || index < -1 || index >= BgmFiles.Count) return; Music.Stop(); BgmIndex = index; selectionView?.RefreshSelection(); }
+    public async Task PreviewBgmAsync()
+    {
+        if (IsBusy) return;
+        try { await Music.PlayAsync(SelectedBgm); }
+        catch (Exception e) { EnvironmentMessage = e.Message; selectionView?.RefreshSelection(); }
+    }
+
+    public void SelectPilot(bool opponent, int index)
+    {
+        if (IsBusy || index < -1 || index >= pilots.Count) return;
+        if (opponent) secondPilotIndex = index; else firstPilotIndex = index;
+        selectionView?.RefreshSelection();
+    }
+
+    public void CyclePilot(bool opponent, int direction)
+    {
+        int current = opponent ? secondPilotIndex : firstPilotIndex;
+        int next = (current + 1 + direction + pilots.Count + 1) % (pilots.Count + 1) - 1;
+        SelectPilot(opponent, next);
+    }
+
+    void RefreshPilots()
+    {
+        string first = FirstPilot?.DirectoryPath, second = SecondPilot?.DirectoryPath;
+        pilots.Clear(); firstPilotIndex = secondPilotIndex = -1;
+        var diagnostics = new List<string>();
+        try
+        {
+            string root = !string.IsNullOrEmpty(dataRoot) ? dataRoot : DefaultDataRoot();
+            PilotsRoot = Argument("--pilots-folder") ?? Path.Combine(root, "Pilot");
+            pilots.AddRange(TestPlayPilotData.Scan(PilotsRoot, diagnostics));
+            firstPilotIndex = pilots.FindIndex(p => string.Equals(p.DirectoryPath, first, StringComparison.OrdinalIgnoreCase));
+            secondPilotIndex = pilots.FindIndex(p => string.Equals(p.DirectoryPath, second, StringComparison.OrdinalIgnoreCase));
+            PilotMessage = pilots.Count == 0 ? "パイロットデータなし（パイロットなしで出撃できます）" : pilots.Count + "人のパイロットを読み込みました。";
+            if (diagnostics.Count > 0) PilotMessage += "\n" + string.Join("\n", diagnostics);
+        }
+        catch (Exception e) { PilotMessage = "パイロット一覧を読み込めません: " + e.Message; }
     }
 
     public string DisplayNameAt(int index) => GetDisplayName(SelectedName(index));
@@ -149,13 +306,25 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
 
     async Task EnterBattleAsync(string first, string second, CancellationToken token)
     {
+        Music.Stop();
         await LoadSceneAsync(BattleScene);
         token.ThrowIfCancellationRequested();
         BindBattle();
         ReleaseImages();
+        if (SelectedMap != null)
+        {
+            SetPhase("マップを読み込み中: " + SelectedMap.Name, false);
+            Stage = new GameObject("LoadedStage").AddComponent<TestPlayStageRuntime>();
+            await Stage.LoadAsync(SelectedMap, gameCamera, token);
+            Stage.PlacePlayers(playerSlot, opponentSlot);
+            var environment = GameObject.Find("StandaloneGround");
+            if (environment != null) environment.SetActive(false);
+        }
         SetPhase("機体データを読み込み中", false);
-        await host.StartAsync(first, second, token);
+        await host.StartWithCpuAsync(first, second, OpponentCpuSettings, token);
         token.ThrowIfCancellationRequested();
+        FindFirstObjectByType<TestPlayPilotBattle>()?.Bind(host.Session, FirstPilot, SecondPilot);
+        await Music.PlayAsync(SelectedBgm, token);
         UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null);
     }
 
@@ -165,6 +334,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         return ExecuteAsync(async token => {
             SetPhase("再戦の準備中", false);
             await host.RestartAsync(token);
+            FindFirstObjectByType<TestPlayPilotBattle>()?.Bind(host.Session, FirstPilot, SecondPilot);
             UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null);
         });
     }
@@ -199,6 +369,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
     {
         if (IsBusy) return Task.CompletedTask;
         IsBusy = true; LastOperationSucceeded = false;
+        selectionView?.RefreshSelection();
         cancellation = new CancellationTokenSource();
         loadingView?.Show(true);
         return operation = ExecuteCoreAsync(action, cancellation.Token);
@@ -227,9 +398,12 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
 
     async Task StopBattleAsync()
     {
+        Music?.Stop();
+        FindFirstObjectByType<TestPlayPilotBattle>()?.Unbind();
         SetPhase("戦闘を終了しています", false);
         if (host == null) host = FindFirstObjectByType<TestPlayBattleView>()?.sessionHost;
         if (host != null) await host.StopAsync();
+        if (Stage != null) { Stage.Release(); Destroy(Stage.gameObject); Stage = null; }
         host = null; sessionHost = null; hudCanvas = null; playerSlot = null; opponentSlot = null; gameCamera = null;
     }
 
@@ -295,6 +469,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         selectionImages.Clear();
         mechNames.Clear();
         mechDisplayNames.Clear();
+        mechDescriptions.Clear();
         firstIndex = 0;
         secondIndex = 0;
 
@@ -319,8 +494,9 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
                 continue;
             string folderName = Path.GetFileName(directory);
             mechNames.Add(folderName);
-            // charaselect.sdt の1行目を表示名として読む（なければフォルダ名をフォールバック）
-            mechDisplayNames[folderName] = ReadCharaSelectName(directory, folderName);
+            // 1行目は機体名、2～6行目は選択画面の説明。原本は読み取りのみ。
+            mechDisplayNames[folderName] = ReadCharaSelect(directory, folderName, out string description);
+            mechDescriptions[folderName] = description;
         }
         mechNames.Sort(StringComparer.OrdinalIgnoreCase);
 
@@ -335,16 +511,26 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         message = mechNames.Count + "機の機体フォルダを読み込みました。";
     }
 
-    /// <summary>機体フォルダ内の charaselect.sdt 1行目を表示名として返す。ファイルがなければ folderName を返す。</summary>
-    static string ReadCharaSelectName(string directory, string folderName)
+    /// <summary>1行目の表示名と2～6行目の説明を読む。欠損時はフォルダ名と空の説明を返す。</summary>
+    static string ReadCharaSelect(string directory, string folderName, out string description)
     {
+        description = "";
         string sdtPath = FindFileIgnoreCase(directory, "charaselect.sdt");
         if (sdtPath == null) return folderName;
         try
         {
             // Use the shared decoder, including in a standalone Player without CP932 providers.
             string text = USEncoder.ToEncoding.ToUnicode(File.ReadAllBytes(sdtPath));
-            string line = text.Split(new[] { '\r', '\n' }, 2)[0];
+            using var reader = new StringReader(text);
+            string line = reader.ReadLine();
+            var lines = new List<string>(5);
+            for (int i = 0; i < 5; i++)
+            {
+                string next = reader.ReadLine();
+                if (next == null) break;
+                lines.Add(next);
+            }
+            description = string.Join("\n", lines);
             if (!string.IsNullOrWhiteSpace(line)) return line.Trim();
         }
         catch (Exception e)
@@ -352,6 +538,13 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
             Debug.LogWarning("[Standalone Player] charaselect.sdtの読込に失敗しました: " + sdtPath + " / " + e.Message);
         }
         return folderName;
+    }
+
+    public string DescriptionAt(int index)
+    {
+        string folderName = SelectedName(index);
+        return !string.IsNullOrEmpty(folderName) && mechDescriptions.TryGetValue(folderName, out string description)
+            ? description : "";
     }
 
     /// <summary>インデックスから表示名（charaselect.sdt 1行目 or フォルダ名）を返す。</summary>
@@ -471,12 +664,56 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         return null;
     }
 
-    static string DefaultMechsRoot()
+    public static string DefaultDataRoot()
     {
         DirectoryInfo parent = Directory.GetParent(Application.dataPath);
         if (parent != null)
-            return Path.Combine(parent.FullName, "Windom_Data", "Robo");
-        return Path.GetFullPath(DefaultRelativeMechsRoot);
+            return Path.Combine(parent.FullName, "Windom_Data");
+        return Path.GetFullPath(DefaultRelativeDataRoot);
+    }
+
+    public static string DefaultMechsRoot()
+    {
+        return Path.Combine(DefaultDataRoot(), "Robo");
+    }
+
+    public static string ResolveDataRoot(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return DefaultDataRoot();
+        string full = Path.GetFullPath(path.Trim()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (Directory.Exists(Path.Combine(full, "Robo")) || Directory.Exists(Path.Combine(full, "Texture")) ||
+            string.Equals(Path.GetFileName(full), "Windom_Data", StringComparison.OrdinalIgnoreCase))
+            return full;
+        string parent = Path.GetDirectoryName(full);
+        if (!string.IsNullOrEmpty(parent))
+        {
+            if (Directory.Exists(Path.Combine(parent, "Texture")) || Directory.Exists(Path.Combine(parent, "Sound")) ||
+                string.Equals(Path.GetFileName(parent), "Windom_Data", StringComparison.OrdinalIgnoreCase))
+                return parent;
+        }
+        return !string.IsNullOrEmpty(parent) ? parent : DefaultDataRoot();
+    }
+
+    void ConfigureRoots(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            dataRoot = DefaultDataRoot();
+            mechsRoot = Path.Combine(dataRoot, "Robo");
+            return;
+        }
+        string full = Path.GetFullPath(path.Trim()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (string.Equals(Path.GetFileName(full), "Windom_Data", StringComparison.OrdinalIgnoreCase) ||
+            (Directory.Exists(Path.Combine(full, "Robo")) && !string.Equals(Path.GetFileName(full), "Robo", StringComparison.OrdinalIgnoreCase)))
+        {
+            dataRoot = full;
+            mechsRoot = Path.Combine(full, "Robo");
+        }
+        else
+        {
+            mechsRoot = full;
+            dataRoot = ResolveDataRoot(full);
+        }
     }
 
 
@@ -491,4 +728,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         if (Instance == this) { Instance = null; cancellation?.Cancel(); }
         ReleaseImages();
     }
+
+    void OnApplicationPause(bool paused) { if (paused) TestPlayAudioSettings.Save(); }
+    void OnApplicationQuit() { TestPlayAudioSettings.Save(); }
 }

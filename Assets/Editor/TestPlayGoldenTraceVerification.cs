@@ -828,7 +828,10 @@ public static class TestPlayGoldenTraceVerification
                 VectorsNearlyEqual(projectileObject.transform.position, controller.robo.root.transform.position);
             capture.shotType1EnergySemanticsValid &=
                 NearlyEqual(movementEnergyDelta, 0f) &&
-                NearlyEqual(auxiliaryEnergyDelta, 200f);
+                // This is the whole-tick net delta: cost 200, then the
+                // original shot handler FUN_004d8e30 recovers 1. Baseline
+                // trace files remain immutable; this asserts the new contract.
+                NearlyEqual(auxiliaryEnergyDelta, 199f);
         }
 
         if (cooldownEvent || profileEvent || attackFlagEvent || projectileEvent || procTypeOneEvent)
@@ -1669,7 +1672,7 @@ public static class TestPlayGoldenTraceVerification
                     "GT-007 must accept one X press edge at tick 3, run shot action 100 once for " +
                     "39 ticks, and execute the representative real ANI bundle at tick 18: " +
                     "AttackDelay(0,100), ATTACK(100,200,0.4,0), AttackFlag=2, and one RunProc2 " +
-                    "type-1 projectile using its WEAPONPOINT, p0 energy charge, p2/100 movement, " +
+                    "type-1 projectile using its WEAPONPOINT, p0 energy charge (200 minus 1 native recovery), p2/100 movement, " +
                     "p1 trail count, fixed 300-tick Core, and OriginalScriptProfile. Cooldown slot 0 must decay " +
                     "once per 60 Hz tick to zero at tick 118, while the action exits through " +
                     "grounded recovery action 6 at tick 42 and returns to idle 0 at tick 76. " +

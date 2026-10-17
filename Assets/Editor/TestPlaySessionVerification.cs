@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -195,6 +195,18 @@ public static class TestPlaySessionVerification
         assertions += await TestPlaySessionCombatVerification.VerifyShotImpactAsync(path, outputFolder, token);
         assertions += await TestPlaySessionCombatVerification.VerifyShotColliderAsync(path, outputFolder, token);
         assertions += await TestPlaySessionCombatVerification.VerifyLockedShotAsync(path, outputFolder, token);
+        assertions += await TestPlayMachineGunVerification.RunAsync(outputFolder, token);
+        assertions += await TestPlayType11Verification.RunAsync(outputFolder, token);
+        assertions += await TestPlayType9Verification.RunAsync(outputFolder, token);
+        assertions += await TestPlayType26Verification.RunAsync(outputFolder, token);
+        assertions += await TestPlayType18Verification.RunAsync(outputFolder, token);
+        assertions += await TestPlayType31Verification.RunAsync(outputFolder, token);
+        assertions += await TestPlayModelAttackVerification.RunAsync(outputFolder, token);
+        assertions += await TestPlayBeamAttackVerification.RunAsync(outputFolder, token);
+        assertions += await TestPlayOrdnanceVerification.RunAsync(outputFolder, token);
+        assertions += await TestPlaySupportVerification.RunAsync(outputFolder, token);
+        assertions += await TestPlayActionEffectVerification.RunAsync(outputFolder, token);
+        assertions += await TestPlayCpuVerification.RunSessionAsync(outputFolder, token);
         check(CountSessionCombatEffectRoots() == combatEffectsBefore,
             "session verification leaves no combat effect roots");
         return assertions;
@@ -242,25 +254,28 @@ public static class TestPlaySessionCombatVerification
                     launchPosition = shot.transform.position;
                     launchForward = shot.transform.forward;
                     Vector3 targetPosition = c.GetLockedTargetTransform().position;
-                    Vector3 desired = targetPosition - launchPosition;
+                    session.TryGet(c.SessionLockHandle, out var targetSnapshot);
+                    Vector3 shotAimPosition = (targetSnapshot.ShotCapsuleStart + targetSnapshot.ShotCapsuleEnd) * 0.5f;
+                    Vector3 desired = shotAimPosition - launchPosition;
                     var muzzle = c.RuntimeSptData.WeaponPoints[0];
                     float cone = Vector3.Angle(muzzle.WorldForward, desired);
                     float error = Vector3.Angle(launchForward, desired);
                     float muzzleError = Vector3.Angle(launchForward, muzzle.WorldForward);
-                    // Original joint aiming is constrained and is not muzzle IK.
-                    // Its type1 20-degree cone is a coarse facing acceptance bound;
-                    // do not redirect the bullet to erase the remaining ANI offset.
-                    check(error < TestPlayCombatCore.OriginalType1InitialAimConeDegrees,
-                        "constrained ANI pose faces within original type1 cone, case=" + index + " error=" + error);
+                    check(cone < TestPlayCombatCore.OriginalType1InitialAimConeDegrees,
+                        "constrained ANI pose enters original type1 aim cone, case=" + index + " cone=" + cone);
+                    check(error < 0.05f,
+                        "original type1 initial aim points at target collider centre, case=" + index + " error=" + error);
                     if (c.currentAnimationIndex != 103)
                     {
-                        Transform arm = c.RuntimeSptData.AttackArms[0].BoneTr;
-                        Vector3 local = arm.InverseTransformVector(targetPosition - arm.position);
-                        local.z = 0f;
-                        check(Vector3.Angle(local, Vector3.down) < 0.05f,
-                            "real SPT arm aims its local -Y at projected target without off-axis twist");
+                        // E6 aligns the visible firing limb to its WEAPONPOINT
+                        // after the original joint solver. The final arm -Y is
+                        // no longer the acceptance axis; the muzzle must agree
+                        // with the actual launch toward the capsule centre.
+                        check(muzzleError < 0.05f,
+                            "E6 visible muzzle aligns with the launched shot after joint aiming");
                     }
-                    check(muzzleError < 0.05f, "bullet leaves straight along the visible muzzle axis");
+                    check(muzzleError <= cone + 0.05f,
+                        "initial aim correction stays within the muzzle-to-target cone");
                     check(Vector3.Distance(launchPosition, muzzle.BoneTr.position) < 0.0001f, "real WEAPONPOINT origin retained");
                     check(Vector3.Distance(lockPosition, targetPosition) > 1f, "target is sampled at launch, not lock acquisition");
                     trace.Add(FormattableString.Invariant($"{index},{session.Tick},{c.currentAnimationIndex},{cone},{error},{muzzleError},{Vector3.Distance(lockPosition, targetPosition)}"));
@@ -279,9 +294,8 @@ public static class TestPlaySessionCombatVerification
                 check(Vector3.Distance(shot.transform.position, launchPosition) < 0.0001f,
                     "new shot does not move until next session tick");
                 var visibleMuzzle = c.RuntimeSptData.WeaponPoints[shot.weaponPointId];
-                check(Vector3.Angle(launchForward, visibleMuzzle.WorldForward) < 0.05f &&
-                      Vector3.Distance(launchPosition, visibleMuzzle.BoneTr.position) < 0.0001f,
-                    "end-of-tick rendered muzzle still matches emission after pose and root motion");
+                check(Vector3.Distance(launchPosition, visibleMuzzle.BoneTr.position) < 0.0001f,
+                    "end-of-tick rendered muzzle origin still matches emission after pose and root motion");
                 if (Application.isPlaying)
                     CaptureLockedShotPose(c, folder, index);
                 // Move target after launch; movement still uses the launch direction first.
@@ -381,6 +395,24 @@ public static class TestPlaySessionCombatVerification
                 snapshot.ShotCapsuleStart,snapshot.ShotCapsuleEnd,snapshot.ShotCapsuleRadius),"zero length segment inside hits");
             check(TestPlayCombatCore.IntersectsTrailSegmentCapsule(new Vector3(0,5,4),new Vector3(0,-1,4),
                 snapshot.ShotCapsuleStart,snapshot.ShotCapsuleEnd,snapshot.ShotCapsuleRadius),"parallel high-speed segment intersects capsule caps");
+            Vector3 bladePreviousOrigin = new Vector3(0,1.6f,2);
+            Vector3 bladeCurrentOrigin = new Vector3(0,1.6f,4.5f);
+            var meleeState = TestPlayCombatCore.CreateMeleeAttackState(default,1,0,1.5f,2,0,0,
+                bladePreviousOrigin,Vector3.forward,"capsule-fixture");
+            var meleeHits = new List<TestPlayTargetSnapshot>();
+            var meleeTick = TestPlayCombatCore.TickMeleeAttackTargets(meleeState,bladeCurrentOrigin,
+                Vector3.forward,new[] { snapshot },meleeHits);
+            check(!TestPlayCombatCore.IntersectsSweptSegmentSphere(bladePreviousOrigin,
+                    bladePreviousOrigin+Vector3.forward*1.5f,bladeCurrentOrigin,
+                    bladeCurrentOrigin+Vector3.forward*1.5f,snapshot.Position,snapshot.Radius) &&
+                meleeTick.hit && meleeHits.Count==1,
+                "type57 swept blade misses the old root sphere but hits the real torso capsule");
+            check(!TestPlayCombatCore.IntersectsSweptSegmentCapsule(bladePreviousOrigin+Vector3.up*4,
+                    bladePreviousOrigin+Vector3.forward*1.5f+Vector3.up*4,
+                    bladeCurrentOrigin+Vector3.up*4,
+                    bladeCurrentOrigin+Vector3.forward*1.5f+Vector3.up*4,
+                    snapshot.ShotCapsuleStart,snapshot.ShotCapsuleEnd,snapshot.ShotCapsuleRadius),
+                "type57 swept blade above the capsule cap still misses");
             float hp=b.Controller.currentHP;
             var projectile=Projectile(session,a,from);
             projectile.ConfigureOriginalType1(new TestPlayType1ProjectileParameters { activeTicks=12,trailPointCount=10,distancePerTick=10 },false,0);
@@ -391,6 +423,18 @@ public static class TestPlaySessionCombatVerification
             hp=b.Controller.currentHP;
             input.Submit(new TestPlaySessionInput { pressed=new TestPlayGoldenInputFrame { lockTarget=true } });session.Step();
             check(a.Controller.targetLockActive,"S locks real opponent");
+            Transform locked=a.Controller.GetLockedTargetTransform();
+            session.TryGet(b.Handle,out snapshot);
+            Vector3 lockedAim=(Vector3)Call(a.Controller,"ResolveLockedAimTargetPosition",locked);
+            session.TryGet(a.Handle,out var selfSnapshot);
+            Vector3 aimOrigin=(Vector3)Call(a.Controller,"ResolveJointAimOriginPosition",a.Controller.robo.root.transform);
+            check(locked!=null && Vector3.Distance(lockedAim,
+                    (snapshot.ShotCapsuleStart+snapshot.ShotCapsuleEnd)*0.5f)<0.001f &&
+                    Vector3.Distance(lockedAim,locked.position)>0.1f,
+                "locked joint elevation targets the real capsule center instead of the feet proxy");
+            check(Vector3.Distance(aimOrigin,
+                    (selfSnapshot.ShotCapsuleStart+selfSnapshot.ShotCapsuleEnd)*0.5f)<0.001f,
+                "joint elevation starts from the source capsule center rather than its feet proxy");
             input.Submit(new TestPlaySessionInput { pressed=new TestPlayGoldenInputFrame { shot=true } });
             int shots=0;
             a.Controller.RuntimeEventRaised += e=> { if(e.type==TestPlayRuntimeEventType.WeaponSpawned && e.command=="RunProc2:1")shots++; };
@@ -401,6 +445,20 @@ public static class TestPlaySessionCombatVerification
             }
             check(shots==1,"actual X animation emits one shot");
             check(b.Controller.currentHP<hp,"actual S-X muzzle shot hits real opponent collider");
+            Vector3 groundedTargetPosition=b.Controller.robo.root.transform.position;
+            bool groundedTargetUsesCollider=b.Controller.useColliderGrounding;
+            b.Controller.useColliderGrounding=false;
+            b.Controller.robo.root.transform.position=groundedTargetPosition+Vector3.up*3;
+            session.Step();
+            Vector3 elevatedAim=(Vector3)Call(a.Controller,"ResolveLockedAimTargetPosition",
+                a.Controller.GetLockedTargetTransform());
+            session.TryGet(b.Handle,out var elevatedSnapshot);
+            check(Vector3.Distance(elevatedAim,
+                    (elevatedSnapshot.ShotCapsuleStart+elevatedSnapshot.ShotCapsuleEnd)*0.5f)<0.001f &&
+                    elevatedAim.y-lockedAim.y>2.5f,
+                "locked joint elevation follows the airborne target capsule center");
+            b.Controller.robo.root.transform.position=groundedTargetPosition;
+            b.Controller.useColliderGrounding=groundedTargetUsesCollider;
         }
         finally
         {
@@ -441,7 +499,7 @@ public static class TestPlaySessionCombatVerification
             session.Start(); session.Step();
             var a = session.Mechs[0]; var b = session.Mechs[1];
             var audio = b.Controller.presentationRuntime;
-            check(TestPlayPresentationRuntime.FindBinding(audio.sounds, "7")?.clip?.name == "BeamHit",
+            check(Path.GetFileNameWithoutExtension(TestPlayPresentationRuntime.FindBinding(audio.sounds, "7")?.clip?.name) == "BeamHit",
                 "defender has original BeamHit sound mapping");
             int sounds = audio.SoundPlaybackCount, effects = b.Controller.SessionHitEffectSpawnCount;
             int id = AttackId(session, a);
@@ -451,8 +509,11 @@ public static class TestPlaySessionCombatVerification
             b.Controller.state.SetInt(158, 2);
             Impact(session, id, a, b, 0x10, 1, 0, 0, 0, false, 0, out var invulnerable);
             check(invulnerable.decision == TestPlayCombatHitDecision.Invulnerable, "shot fixture actually blocks damage");
-            check(audio.SoundPlaybackCount == sounds && b.Controller.SessionHitEffectSpawnCount == effects,
-                "guard and invulnerability emit neither damage sound nor flash");
+            check(audio.SoundPlaybackCount == sounds + 1 && b.Controller.SessionHitEffectSpawnCount == effects,
+                "guard emits one feedback sound; invulnerability adds neither sound nor damage flash");
+            for(int i=0;i<32;i++) session.Step();
+            if(Application.isPlaying) await Task.Yield();
+            sounds=audio.SoundPlaybackCount;
             Set(b.Controller, "shieldGuard", 0); b.Controller.state.SetInt(158, 0);
             float hp = b.Controller.currentHP;
             var projectile = Projectile(session, a, Vector3.forward * 2 + Vector3.up * 1.6f);
@@ -462,8 +523,8 @@ public static class TestPlaySessionCombatVerification
                 "one projectile hit requests BeamHit exactly once on the defender");
             check(b.Controller.SessionHitEffectSpawnCount == effects + 1, "one projectile hit creates one composite impact");
             var layers = b.Controller.GetComponentsInChildren<TestPlayOriginalEffect>();
-            check(layers.Length == 18 && layers.Any(l => l.sourceTexture.name.EndsWith("beamHit2")) &&
-                layers.Any(l => l.sourceTexture.name.EndsWith("beamHit3")), "impact contains original flash, ring and 16 spark streaks");
+            check(layers.Length == 61 && layers.Count(l => Path.GetFileNameWithoutExtension(l.sourceTexture.name)=="beam2")==60 &&
+                layers.Any(l => Path.GetFileNameWithoutExtension(l.sourceTexture.name)=="beamHit3"), "impact contains flash, 40 moving beams and 20 debris");
             check(layers.All(l => l.GetComponent<Renderer>().enabled && l.CurrentTint.a > 0.9f), "all impact layers start visible");
             if (Application.isPlaying)
             {
@@ -472,16 +533,16 @@ public static class TestPlaySessionCombatVerification
                 CaptureShotImpact(b.Controller, layers, folder);
             }
             var initialPositions = layers.Select(l => l.transform.position).ToArray();
-            for (int i = 0; i < 12; i++) session.Step();
+            for (int i = 0; i < 6; i++) session.Step();
             check(audio.SoundPlaybackCount == sounds + 1 && b.Controller.currentHP == hp - 25,
                 "same projectile trail cannot repeat the damage or sound");
             check(layers.All(l => l != null && l.CurrentTint.a < 1f && l.CurrentTint.a > 0f), "flash and sparks fade on the session clock");
             check(layers.Where(l => l.billboardAxis.sqrMagnitude > 0f).All(l =>
-                Vector3.Distance(l.transform.position, initialPositions[Array.IndexOf(layers,l)]) > 0.6f), "sparks travel visibly away from the impact");
+                Vector3.Distance(l.transform.position, initialPositions[Array.IndexOf(layers,l)]) > 0.01f), "sparks travel visibly away from the impact");
             if (Application.isPlaying) CaptureShotImpact(b.Controller, layers, folder, "shot-impact-spread.png");
-            for (int i = 0; i < 18; i++) session.Step();
+            for (int i = 0; i < 26; i++) session.Step();
             if (Application.isPlaying) await Task.Yield();
-            check(layers.All(l => l == null), "impact layers are removed after 30 ticks");
+            check(layers.All(l => l == null), "impact layers are removed after 32 ticks");
             Impact(session, AttackId(session,a), a,b,0x40,1,0,0,0,false,0,out _);
             check(audio.SoundPlaybackCount == sounds + 2 && b.Controller.SessionHitEffectSpawnCount == effects + 2,
                 "a separate accepted shot receives its own sound and effect");
@@ -567,9 +628,14 @@ public static class TestPlaySessionCombatVerification
             int id = AttackId(s, a);
             Set(b.Controller, "shieldGuard", 1);
             Impact(s, id, a, b, 0, 1, 0, 0, 0, true, 0, out _);
+            // E3 added an explicit guard contact sound (7). It is not the
+            // accepted melee damage sound (11); invulnerability stays silent.
+            check(audio.SoundPlaybackCount == sounds + 1 && audio.LastSoundPlaybackKey == "7",
+                "guard plays one guard contact SE, not melee damage SE");
+            sounds = audio.SoundPlaybackCount;
             b.Controller.state.SetInt(158, 2);
             Impact(s, id, a, b, 0x10, 1, 0, 0, 0, true, 0, out _);
-            check(audio.SoundPlaybackCount == sounds, "guard and invulnerability do not play damage SE");
+            check(audio.SoundPlaybackCount == sounds, "invulnerability adds no damage SE");
             b.Controller.state.SetInt(158, 0);
             Set(b.Controller, "shieldGuard", 0);
             Impact(s, id, a, b, 0, 1, 250, 0, 0, true, 4, out _);

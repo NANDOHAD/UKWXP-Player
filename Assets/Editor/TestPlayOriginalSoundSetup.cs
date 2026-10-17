@@ -7,7 +7,7 @@ using UnityEngine;
 
 public static class TestPlayOriginalSoundSetup
 {
-    const string SoundFolder = "Assets/SND_SE";
+    const string SoundFolder = "Windom_Data/Sound";
     const string PropulsionStartFileName = "burner.wav";
     const string PropulsionLoopFileName = "burner_f15.wav";
 
@@ -73,45 +73,9 @@ public static class TestPlayOriginalSoundSetup
 
     public static int ApplyMappings(TestPlayPresentationRuntime presentation)
     {
-        if (presentation == null)
-            throw new ArgumentNullException(nameof(presentation));
-
-        Dictionary<string, AudioClip> clipsByFileName = LoadClipsByFileName();
-        List<TestPlayAudioBinding> rebuilt = new List<TestPlayAudioBinding>();
-        HashSet<string> originalKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        for (int i = 0; i < OriginalSnd.Length; i++)
-        {
-            OriginalSndSpec spec = OriginalSnd[i];
-            if (!clipsByFileName.TryGetValue(spec.fileName, out AudioClip clip) || clip == null)
-                throw new FileNotFoundException("Original Snd(" + spec.id + ") resource was not found: " + spec.fileName, SoundFolder);
-
-            string key = spec.id.ToString();
-            originalKeys.Add(key);
-            rebuilt.Add(new TestPlayAudioBinding { key = key, clip = clip, volume = 1f });
-        }
-
-        if (!clipsByFileName.TryGetValue(PropulsionStartFileName, out AudioClip propulsionStartClip) || propulsionStartClip == null)
-            throw new FileNotFoundException("Propulsion start resource was not found: " + PropulsionStartFileName, SoundFolder);
-        if (!clipsByFileName.TryGetValue(PropulsionLoopFileName, out AudioClip propulsionLoopClip) || propulsionLoopClip == null)
-            throw new FileNotFoundException("Propulsion loop resource was not found: " + PropulsionLoopFileName, SoundFolder);
-
-        if (presentation.sounds != null)
-        {
-            for (int i = 0; i < presentation.sounds.Count; i++)
-            {
-                TestPlayAudioBinding binding = presentation.sounds[i];
-                if (binding != null && !originalKeys.Contains(binding.key ?? ""))
-                    rebuilt.Add(binding);
-            }
-        }
-
-        Undo.RecordObject(presentation, "Rebuild original SND_SE mappings");
-        presentation.sounds = rebuilt;
-        presentation.propulsionStartClip = propulsionStartClip;
-        presentation.propulsionLoopClip = propulsionLoopClip;
-        EditorUtility.SetDirty(presentation);
-        return OriginalSnd.Length;
+        if (presentation == null) throw new ArgumentNullException(nameof(presentation));
+        presentation.LoadExternalResources();
+        return presentation.sounds.Count;
     }
 
     public static bool TryGetFileName(int id, out string fileName)
@@ -142,19 +106,4 @@ public static class TestPlayOriginalSoundSetup
         return true;
     }
 
-    static Dictionary<string, AudioClip> LoadClipsByFileName()
-    {
-        Dictionary<string, AudioClip> result = new Dictionary<string, AudioClip>(StringComparer.OrdinalIgnoreCase);
-        string[] guids = AssetDatabase.FindAssets("t:AudioClip", new[] { SoundFolder });
-        for (int i = 0; i < guids.Length; i++)
-        {
-            string path = AssetDatabase.GUIDToAssetPath(guids[i]);
-            string fileName = Path.GetFileName(path);
-            AudioClip clip = AssetDatabase.LoadAssetAtPath<AudioClip>(path);
-            if (result.ContainsKey(fileName))
-                throw new InvalidOperationException("Duplicate AudioClip filename in " + SoundFolder + ": " + fileName);
-            result.Add(fileName, clip);
-        }
-        return result;
-    }
 }

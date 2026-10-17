@@ -234,7 +234,9 @@ public static class WindomVerificationRunner
                 name = "Standalone", assertions = await TestPlayStandaloneVerification.RunForJobAsync(job.outputFolder, token)
             });
         if ((selection & WindomVerificationSelection.Runtime) != 0)
-            await RunSuite(job, "Runtime", token, () => Task.FromResult(new WindomVerificationSuiteResult { name = "Runtime", assertions = TestPlayRuntimeVerification.RunAll() }));
+            await RunSuite(job, "Runtime", token, async () => new WindomVerificationSuiteResult {
+                name = "Runtime", assertions = await TestPlayRuntimeVerification.RunForJobAsync(job.outputFolder, token)
+            });
         if ((selection & WindomVerificationSelection.Hod) != 0)
             await RunSuite(job, "Hod", token, async () => new WindomVerificationSuiteResult { name = "Hod", assertions = await HodHierarchyPriorityVerification.RunForJobAsync() });
         if ((selection & WindomVerificationSelection.Golden) != 0)

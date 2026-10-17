@@ -27,12 +27,19 @@ public sealed class TestPlaySessionBootstrap : MonoBehaviour
     CancellationTokenSource loading;
     Task startTask, stopTask;
     string firstSource, secondSource;
+    public TestPlayCpuSettings OpponentCpuSettings { get; private set; } = new TestPlayCpuSettings();
+    public TestPlayCpuInputProvider OpponentCpu { get; private set; }
 
     public Task StartAsync(string firstPath, string secondPath, CancellationToken token = default)
+        => StartWithCpuAsync(firstPath, secondPath, new TestPlayCpuSettings(), token);
+
+    public Task StartWithCpuAsync(string firstPath, string secondPath, TestPlayCpuSettings cpuSettings,
+        CancellationToken token = default)
     {
         if (destroyed || restarting || Status == "Loading" || Status == "Running" || Status == "Stopping" ||
             (startTask != null && !startTask.IsCompleted) || (stopTask != null && !stopTask.IsCompleted))
             throw new InvalidOperationException("起動・停止処理の完了後に開始してください。");
+        OpponentCpuSettings = cpuSettings ?? throw new ArgumentNullException(nameof(cpuSettings));
         return BeginStart(firstPath, secondPath, token);
     }
 
@@ -49,6 +56,8 @@ public sealed class TestPlaySessionBootstrap : MonoBehaviour
         try
         {
             keyboard = new TestPlayBufferedInputProvider(1);
+            OpponentCpu = OpponentCpuSettings.Mode == TestPlayCpuMode.Cpu
+                ? new TestPlayCpuInputProvider(OpponentCpuSettings) : null;
             if (gameCamera != null)
             {
                 var adapter = gameCamera.GetComponent<TestPlayCameraController>();
@@ -64,7 +73,7 @@ public sealed class TestPlaySessionBootstrap : MonoBehaviour
                 CreateSpawn(firstPath, playerSlot, new Vector3(-3, 0, 0), Quaternion.identity,
                     keyboard, cameraAdapter, showHud: true, hudCanvas, presentationTemplate),
                 CreateSpawn(secondPath, opponentSlot, new Vector3(3, 0, 12), Quaternion.Euler(0, 180, 0),
-                    new TestPlayIdleInputProvider(), null, showHud: false, null, presentationTemplate)
+                    (ITestPlayInputProvider)OpponentCpu ?? new TestPlayIdleInputProvider(), null, showHud: false, null, presentationTemplate)
             }, TestPlaySessionClock.Automatic, token);
             token.ThrowIfCancellationRequested();
             Session.Start();
@@ -74,7 +83,7 @@ public sealed class TestPlaySessionBootstrap : MonoBehaviour
         {
             Failure = e.Message;
             try { if (Session != null) await Session.StopAsync(); }
-            finally { await RestoreCameraAsync(); keyboard = null; Status = e is OperationCanceledException ? "Cancelled" : "Faulted"; }
+            finally { OpponentCpu?.Dispose(); await RestoreCameraAsync(); keyboard = null; Status = e is OperationCanceledException ? "Cancelled" : "Faulted"; }
             throw;
         }
         finally { loading.Dispose(); loading = null; }
@@ -97,7 +106,7 @@ public sealed class TestPlaySessionBootstrap : MonoBehaviour
 
     async void Update()
     {
-        if (Status != "Running") return;
+        if (Status != "Running" || Time.timeScale == 0f) return;
         try
         {
             AdvanceInput(TestPlayKeyboardInput.Sample(cameraAdapter), Time.deltaTime);
@@ -130,6 +139,7 @@ public sealed class TestPlaySessionBootstrap : MonoBehaviour
         try
         {
             if (Session != null) await Session.StopAsync();
+            OpponentCpu?.Dispose();
             await RestoreCameraAsync();
             keyboard = null;
             Status = failed ? "Faulted" : cancelled ? "Cancelled" : "Stopped";

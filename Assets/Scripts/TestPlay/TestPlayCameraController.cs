@@ -52,8 +52,10 @@ public class TestPlayCameraController : MonoBehaviour
     [Min(0.1f)]
     public float minimumCameraDistance = 1.2f;
 
-    [Header("CamEffect (Unity approximation)")]
+    [Header("CamEffect (original placement modes)")]
+    [Tooltip("CamEffectの配置切替を有効にします。既存Inspector互換のためフィールド名を保持。")]
     public bool approximateCameraEffects = true;
+    // Legacy Inspector fields retained for serialized compatibility; CamEffect no longer uses noise.
     [Min(0.01f)]
     public float cameraEffectDuration = 0.18f;
     [Min(0f)]
@@ -78,8 +80,77 @@ public class TestPlayCameraController : MonoBehaviour
     bool hasPreviousPlayerPivot;
     Vector3 movementReferenceForward;
     bool hasMovementReference;
-    float shakeTimeRemaining;
-    float shakeStrength;
+    public int OriginalShakeTicks { get; private set; }
+    bool originalShakeNegative;
+    float originalShakeOffset;
+    public void RequestOriginalDistanceShake(Vector3 source, float radius)
+    {
+        // 004fa830 (62:1): truncate the scaled falloff, not the distance.
+        RequestScaledShake(DistanceFromEye(source), radius, 3f);
+    }
+    float DistanceFromEye(Vector3 source)
+    {
+        Vector3 eye = controlledCamera != null ? controlledCamera.transform.position : transform.position;
+        return Vector3.Distance(source, eye);
+    }
+    void RequestScaledShake(float distance, float radius, float scale)
+    {
+        float candidate = (radius - distance) * scale;
+        if (distance >= 0f && distance < radius && OriginalShakeTicks < candidate)
+            OriginalShakeTicks = (int)candidate;
+    }
+    void RequestQuantizedDistanceShake(float distance, int radius)
+    {
+        // 00464c80 / 004e3420 compare continuous falloff, then truncate distance.
+        if (distance >= 0f && distance < radius && OriginalShakeTicks < (radius - distance) * 3f)
+            OriginalShakeTicks = (radius - (int)distance) * 3;
+    }
+    public void RequestOriginalDownShake(Vector3 source)
+    {
+        RequestQuantizedDistanceShake(DistanceFromEye(source), 15);
+    }
+    public void RequestOriginalCannonShake(Vector3 source)
+    {
+        // 00468c40/00469260 (Canon), 004698c0/00469ea0 (Canon2).
+        RequestScaledShake(DistanceFromEye(source), 30f, 1f);
+    }
+    public void RequestOriginalGrenadeShake(Vector3 source)
+    {
+        // 004957d0: one request when the fuse detonates, not on bounce/contact.
+        RequestScaledShake(DistanceFromEye(source), 30f, 1.5f);
+    }
+    public void RequestOriginalOrdnanceImpactShake(Vector3 source)
+    {
+        // 0046d470 / 0046e9c0 / 0046f3c0: Missile3, Missile4 and Bomb contact.
+        RequestScaledShake(DistanceFromEye(source), 30f, 1.5f);
+    }
+    public void RequestOriginalFireRunShake(Vector3 source)
+    {
+        // 00494ce0: caller gates this at pre-increment age % 3 == 0.
+        RequestScaledShake(DistanceFromEye(source), 30f, 1f);
+    }
+    public void RequestOriginalSwordContactShake(Vector3 source)
+    {
+        // LZ_Sword (type32), hit callback 004830c0 only; not guard/terrain or Sword2.
+        RequestScaledShake(DistanceFromEye(source), 20f, 1f);
+    }
+    public void RequestOriginalDefeatShake(Vector3 source)
+    {
+        // 004bf8a0: death counter31, using the live mech root position.
+        RequestScaledShake(DistanceFromEye(source), 50f, 2.5f);
+    }
+    public void TickOriginalDistanceShake()
+    {
+        originalShakeOffset=0;
+        if(OriginalShakeTicks<=0)return;
+        if(OriginalShakeTicks%3==0)originalShakeNegative=!originalShakeNegative;
+        originalShakeOffset=(originalShakeNegative?-1:1)*OriginalShakeTicks/200f;
+        OriginalShakeTicks--;
+    }
+    public void RequestOriginalBeamShake(float distance)
+    {
+        RequestQuantizedDistanceShake(distance, 7);
+    }
     readonly RaycastHit[] obstacleHits = new RaycastHit[16];
 
     void Awake()
@@ -95,7 +166,7 @@ public class TestPlayCameraController : MonoBehaviour
 
     void LateUpdate()
     {
-        if (!cameraModeActive || controller == null || !controller.playModeActive)
+        if (!cameraModeActive || controller == null || !controller.playModeActive || Time.timeScale == 0f)
             return;
 
         Transform playerRoot = GetPlayerRoot();
@@ -107,19 +178,7 @@ public class TestPlayCameraController : MonoBehaviour
 
     public void Bind(TestPlayController source)
     {
-        if (controller == source)
-        {
-            if (controller != null)
-            {
-                controller.PresentationEventRaised -= HandlePresentationEvent;
-                controller.PresentationEventRaised += HandlePresentationEvent;
-            }
-            return;
-        }
-
-        UnsubscribeController();
         controller = source;
-        SubscribeController();
     }
 
     public bool TryGetPlanarMovementBasis(out Vector3 forward, out Vector3 right)
@@ -169,8 +228,7 @@ public class TestPlayCameraController : MonoBehaviour
         hasPreviousPlayerPivot = false;
         movementReferenceForward = Vector3.zero;
         hasMovementReference = false;
-        shakeTimeRemaining = 0f;
-        shakeStrength = 0f;
+        OriginalShakeTicks = 0; originalShakeOffset = 0; originalShakeNegative = false;
         if (overrideFieldOfView)
             controlledCamera.fieldOfView = fieldOfView;
 
@@ -186,8 +244,7 @@ public class TestPlayCameraController : MonoBehaviour
 
         cameraModeActive = false;
         usingLockTarget = false;
-        shakeTimeRemaining = 0f;
-        shakeStrength = 0f;
+        OriginalShakeTicks = 0; originalShakeOffset = 0; originalShakeNegative = false;
         positionVelocity = Vector3.zero;
         hasPreviousPlayerPivot = false;
         movementReferenceForward = Vector3.zero;
@@ -380,43 +437,53 @@ public class TestPlayCameraController : MonoBehaviour
     {
         Vector3 position = followPosition;
         Quaternion rotation = followRotation;
-        if (approximateCameraEffects && shakeTimeRemaining > 0f)
+        if (approximateCameraEffects && controller != null && GetPlayerRoot() != null)
         {
-            shakeTimeRemaining = Mathf.Max(0f, shakeTimeRemaining - Mathf.Max(0f, deltaTime));
-            float duration = Mathf.Max(0.01f, cameraEffectDuration);
-            float envelope = Mathf.Clamp01(shakeTimeRemaining / duration);
-            float phase = Time.unscaledTime * Mathf.Max(0f, cameraEffectFrequency);
-            Vector3 noise = new Vector3(
-                Mathf.PerlinNoise(phase, 0.17f) * 2f - 1f,
-                Mathf.PerlinNoise(0.43f, phase) * 2f - 1f,
-                0f);
-            position += rotation * (noise * cameraEffectPosition * shakeStrength * envelope);
-            rotation *= Quaternion.Euler(
-                noise.y * cameraEffectRotation * shakeStrength * envelope,
-                noise.x * cameraEffectRotation * shakeStrength * envelope,
-                0f);
+            Transform root = GetPlayerRoot();
+            if (TryCalculateCameraEffectPose(controller.CameraEffectMode,
+                controller.CameraEffectPivot, new Pose(root.position, root.rotation),
+                controller.CameraEffectTick, controller.state, out Pose pose))
+            {
+                position = pose.position;
+                rotation = pose.rotation;
+            }
         }
-
+        // 004ccc2c: distance shake is applied after placement, independently of CamEffect=0.
+        position.y += originalShakeOffset;
         controlledCamera.transform.SetPositionAndRotation(position, rotation);
     }
 
-    void HandlePresentationEvent(TestPlayPresentationEvent presentationEvent)
+    // 004c9730 normal camera branch. D3DX row-vector products are reversed for Unity
+    // column vectors. No follow smoothing, collision correction or LookAt is added to 4/5.
+    public static bool TryCalculateCameraEffectPose(int mode, Vector3 pivot, Pose body,
+        int globalTick, TestPlayStateTable state, out Pose pose)
     {
-        if (!approximateCameraEffects || presentationEvent.type != TestPlayPresentationEventType.CameraEffect)
-            return;
-
-        float value = Mathf.Abs(presentationEvent.output);
-        if (value <= 0.0001f)
+        pose = body;
+        if (mode == 1 || mode == 2)
         {
-            shakeTimeRemaining = 0f;
-            shakeStrength = 0f;
-            return;
+            pose.position = pivot + body.rotation * new Vector3(mode == 1 ? 5f : -5f, 0f, 3f);
+            pose.rotation = Quaternion.LookRotation(pivot - pose.position, Vector3.up);
+            return true;
         }
-
-        // The original executable stores CamEffect as a byte, but the per-value visual
-        // meanings are still unknown. Keep this as a bounded Unity approximation.
-        shakeStrength = Mathf.Clamp(value, 1f, 3f);
-        shakeTimeRemaining = Mathf.Max(0.01f, cameraEffectDuration);
+        if (mode == 3)
+        {
+            float yaw = (unchecked((uint)globalTick) % 1080) * 0.3333f * 0.017453f * Mathf.Rad2Deg;
+            pose.rotation = Quaternion.AngleAxis(yaw, Vector3.up)
+                * Quaternion.AngleAxis(0.4363250136375427f * Mathf.Rad2Deg, Vector3.right);
+            pose.position = pivot + pose.rotation * new Vector3(0f, 0f, -7f);
+            return true;
+        }
+        if ((mode != 4 && mode != 5) || state == null) return false;
+        const float degrees = 0.017453f * Mathf.Rad2Deg;
+        Quaternion rotation = Quaternion.AngleAxis(state.GetFloat(107) * degrees, Vector3.forward)
+            * Quaternion.AngleAxis(state.GetFloat(106) * degrees, Vector3.up)
+            * Quaternion.AngleAxis(state.GetFloat(105) * degrees, Vector3.right);
+        Vector3 translation = new Vector3(state.GetFloat(109), state.GetFloat(110), state.GetFloat(111));
+        Vector3 distance = new Vector3(0f, 0f, -state.GetFloat(108));
+        Vector3 local = mode == 4 ? rotation * (translation + distance) : rotation * distance + translation;
+        pose.position = body.position + body.rotation * local;
+        pose.rotation = body.rotation * rotation;
+        return true;
     }
 
     void ResolveReferences()
@@ -427,18 +494,6 @@ public class TestPlayCameraController : MonoBehaviour
             controlledCamera = Camera.main;
         if (editorCamera == null && controlledCamera != null)
             editorCamera = controlledCamera.GetComponent<FreeCam>();
-    }
-
-    void SubscribeController()
-    {
-        if (controller != null)
-            controller.PresentationEventRaised += HandlePresentationEvent;
-    }
-
-    void UnsubscribeController()
-    {
-        if (controller != null)
-            controller.PresentationEventRaised -= HandlePresentationEvent;
     }
 
     Transform GetPlayerRoot()

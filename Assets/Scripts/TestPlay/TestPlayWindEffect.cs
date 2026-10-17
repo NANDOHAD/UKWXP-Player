@@ -18,6 +18,7 @@ public class TestPlayWindEffect : MonoBehaviour
     MeshFilter meshFilter;
     MeshRenderer meshRenderer;
     Material material;
+    Texture2D sourceTexture;
     Color baseColor = Color.white;
     float lifeSeconds;
     float ageSeconds;
@@ -27,13 +28,16 @@ public class TestPlayWindEffect : MonoBehaviour
     public float DisplayWidth { get; private set; }
     public float DisplayLength { get; private set; }
     public float DisplayRadius { get; private set; }
+    public Texture2D SourceTexture => sourceTexture;
+    public float CurrentOpacity { get; private set; } = 1f;
 
     public void ConfigureWindLine(
         float width,
         float length,
         float life,
         Color color,
-        Shader preferredShader)
+        Shader preferredShader,
+        Texture2D texture = null)
     {
         EnsureInitialized();
         Kind = TestPlayWindEffectKind.WindLine;
@@ -43,9 +47,11 @@ public class TestPlayWindEffect : MonoBehaviour
         lifeSeconds = Mathf.Max(0f, life);
         expansionPerSecond = 0f;
         baseColor = color;
+        sourceTexture = texture;
+        CurrentOpacity = Mathf.Clamp01(color.a);
         meshFilter.sharedMesh = GetSharedLineMesh();
         transform.localScale = new Vector3(DisplayWidth, DisplayWidth, DisplayLength);
-        ReplaceMaterial(preferredShader);
+        ReplaceMaterial(preferredShader, texture);
     }
 
     public void ConfigureWindRing(
@@ -63,14 +69,40 @@ public class TestPlayWindEffect : MonoBehaviour
         lifeSeconds = Mathf.Max(0f, life);
         expansionPerSecond = Mathf.Max(0f, expansionSpeed);
         baseColor = color;
+        sourceTexture = null;
+        CurrentOpacity = Mathf.Clamp01(color.a);
         meshFilter.sharedMesh = GetSharedRingMesh();
         transform.localScale = Vector3.one * DisplayRadius;
-        ReplaceMaterial(preferredShader);
+        ReplaceMaterial(preferredShader, null);
+    }
+
+    public void SetOriginalWindLineAlpha(int alpha)
+    {
+        CurrentOpacity = Mathf.Clamp01(alpha / 255f);
+        SetMaterialColor(material, new Color(baseColor.r, baseColor.g, baseColor.b, CurrentOpacity));
+    }
+
+    public void SetOriginalWindRingState(float size, int alphaByte)
+    {
+        DisplayRadius = Mathf.Max(0.001f, size);
+        CurrentOpacity = Mathf.Clamp01(alphaByte / 255f);
+        transform.localScale = Vector3.one * DisplayRadius;
+        SetMaterialColor(material, new Color(baseColor.r, baseColor.g, baseColor.b, CurrentOpacity));
     }
 
     void Awake()
     {
         EnsureInitialized();
+    }
+
+    void LateUpdate()
+    {
+        if (Kind != TestPlayWindEffectKind.WindLine || Camera.main == null) return;
+        // Original 00491a30 builds the draw frame from camera and travel direction.
+        // Keep the longitudinal axis; only roll the narrow sheet toward the camera.
+        Vector3 direction = transform.forward;
+        Vector3 normal = Vector3.ProjectOnPlane(Camera.main.transform.position - transform.position, direction);
+        if (normal.sqrMagnitude > .000001f) transform.rotation = Quaternion.LookRotation(direction, normal.normalized);
     }
 
     void Update()
@@ -83,6 +115,7 @@ public class TestPlayWindEffect : MonoBehaviour
 
         ageSeconds += Time.deltaTime;
         float remaining = 1f - Mathf.Clamp01(ageSeconds / lifeSeconds);
+        CurrentOpacity = baseColor.a * remaining;
         SetMaterialColor(material, new Color(baseColor.r, baseColor.g, baseColor.b, baseColor.a * remaining));
         if (ageSeconds >= lifeSeconds)
             Destroy(gameObject);
@@ -100,7 +133,7 @@ public class TestPlayWindEffect : MonoBehaviour
         meshRenderer.receiveShadows = false;
     }
 
-    void ReplaceMaterial(Shader preferredShader)
+    void ReplaceMaterial(Shader preferredShader, Texture texture)
     {
         DestroyMaterial();
         Shader shader = preferredShader;
@@ -127,6 +160,13 @@ public class TestPlayWindEffect : MonoBehaviour
             hideFlags = HideFlags.DontSave
         };
         SetMaterialColor(material, baseColor);
+        if (texture != null)
+        {
+            if (material.HasProperty("_MainTex"))
+                material.SetTexture("_MainTex", texture);
+            if (material.HasProperty("_BaseMap"))
+                material.SetTexture("_BaseMap", texture);
+        }
         material.renderQueue = (int)RenderQueue.Transparent;
         if (material.HasProperty("_Surface"))
             material.SetFloat("_Surface", 1f);
@@ -169,11 +209,17 @@ public class TestPlayWindEffect : MonoBehaviour
         };
         int[] triangles =
         {
-            0, 2, 1, 1, 2, 3,
-            4, 5, 6, 5, 7, 6
+            0, 2, 1, 1, 2, 3
         };
         sharedLineMesh = new Mesh { name = "TestPlayWindLine" };
         sharedLineMesh.vertices = vertices;
+        sharedLineMesh.uv = new[]
+        {
+            new Vector2(0f, 0f), new Vector2(1f, 0f),
+            new Vector2(0f, 1f), new Vector2(1f, 1f),
+            new Vector2(0f, 0f), new Vector2(1f, 0f),
+            new Vector2(0f, 1f), new Vector2(1f, 1f)
+        };
         sharedLineMesh.triangles = triangles;
         sharedLineMesh.RecalculateNormals();
         sharedLineMesh.RecalculateBounds();

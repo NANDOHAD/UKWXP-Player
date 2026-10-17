@@ -46,6 +46,28 @@ public class TestPlayPresentationRuntime : MonoBehaviour
     public bool preloadMappedAudio = true;
     public bool useSpatialAudio = true;
     public float audioMaxDistance = 40f;
+    public bool PilotOwnsVoice { get; set; }
+    readonly List<AudioSource> positionalSounds = new List<AudioSource>();
+    public int PositionalSoundCount => positionalSounds.Count;
+    public int DroppedPositionalSoundCount { get; private set; }
+    public Vector3 LastSoundWorldPosition { get; private set; }
+    AudioSource PositionalSource(Vector3 position)
+    {
+        // Bounded Unity voice budget, independent emitters keep an impact at its
+        // contact point even while the firing mech moves. No original mixer claim.
+        AudioSource source = positionalSounds.Find(x => x != null && !x.isPlaying);
+        if (source == null)
+        {
+            if (positionalSounds.Count >= 24) { DroppedPositionalSoundCount++; return null; }
+            source = CreateAudioSource("TestPlayAudio_Contact");
+            source.transform.SetParent(null, true);
+            ConfigureAudioSource(source);
+            TestPlayAudioChannel.Bind(source, TestPlayAudioCategory.Sound);
+            positionalSounds.Add(source);
+        }
+        source.transform.position = position;
+        return source;
+    }
 
     /// <summary>
     /// Machine-readable mapping state used by the standalone acceptance run.
@@ -99,6 +121,31 @@ public class TestPlayPresentationRuntime : MonoBehaviour
     readonly HashSet<string> missingAudioKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     readonly HashSet<string> missingTextureKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+    TestPlayExternalResources externalResources;
+    public bool UsesExternalResources => externalResources != null;
+    public void LoadExternalResources(string root = null)
+    {
+        ReleaseExternalResources();
+        externalResources = TestPlayExternalResources.Acquire(root);
+        externalResources.Apply(this);
+        if (originalEffectShader == null) originalEffectShader = Shader.Find("WindomXP/TestPlayOriginalEffect");
+    }
+    public void ReleaseExternalResources()
+    {
+        if (externalResources == null) return;
+        StopPresentation();
+        if (propulsionStartSource != null) propulsionStartSource.clip = null;
+        if (propulsionSource != null) propulsionSource.clip = null;
+        originalTextures.Clear(); sounds.Clear(); propulsionStartClip = propulsionLoopClip = null;
+        externalResources.Dispose(); externalResources = null;
+    }
+    void OnDestroy()
+    {
+        ReleaseExternalResources();
+        foreach (var source in positionalSounds) if (source != null) DestroyPositionalSource(source);
+        positionalSounds.Clear();
+    }
+
     void Awake()
     {
         EnsureAudioSources();
@@ -139,8 +186,16 @@ public class TestPlayPresentationRuntime : MonoBehaviour
             controller.PresentationEventRaised += HandlePresentationEvent;
     }
 
+    static void DestroyPositionalSource(AudioSource source)
+    {
+        if (Application.isPlaying) Destroy(source.gameObject);
+        else DestroyImmediate(source.gameObject);
+    }
+
     public void StopPresentation()
     {
+        foreach (var source in positionalSounds) if (source != null) { source.Stop(); source.clip = null; DestroyPositionalSource(source); }
+        positionalSounds.Clear();
         if (soundSource != null)
             soundSource.Stop();
         if (voiceSource != null)
@@ -152,7 +207,7 @@ public class TestPlayPresentationRuntime : MonoBehaviour
         if (propulsionSource != null)
         {
             propulsionSource.Stop();
-            propulsionSource.volume = 0f;
+            TestPlayAudioChannel.SetBaseVolume(propulsionSource, 0f);
         }
     }
 
@@ -209,7 +264,7 @@ public class TestPlayPresentationRuntime : MonoBehaviour
             if (!Application.isPlaying || propulsionFadeSeconds <= 0f)
             {
                 propulsionSource.Stop();
-                propulsionSource.volume = 0f;
+                TestPlayAudioChannel.SetBaseVolume(propulsionSource, 0f);
             }
             return;
         }
@@ -227,13 +282,13 @@ public class TestPlayPresentationRuntime : MonoBehaviour
 
         if (!Application.isPlaying)
         {
-            propulsionSource.volume = Mathf.Clamp01(propulsionLoopVolume);
+            TestPlayAudioChannel.SetBaseVolume(propulsionSource, propulsionLoopVolume);
             return;
         }
 
         if (!propulsionSource.isPlaying)
         {
-            propulsionSource.volume = Mathf.Clamp01(propulsionLoopVolume);
+            TestPlayAudioChannel.SetBaseVolume(propulsionSource, propulsionLoopVolume);
             propulsionSource.Play();
         }
     }
@@ -246,7 +301,7 @@ public class TestPlayPresentationRuntime : MonoBehaviour
         propulsionStartSource.Stop();
         propulsionStartSource.clip = propulsionStartClip;
         propulsionStartSource.loop = false;
-        propulsionStartSource.volume = Mathf.Clamp01(propulsionStartVolume);
+        TestPlayAudioChannel.SetBaseVolume(propulsionStartSource, propulsionStartVolume);
         if (Application.isPlaying)
             propulsionStartSource.Play();
     }
@@ -379,6 +434,7 @@ public class TestPlayPresentationRuntime : MonoBehaviour
         Collider collider = effectObject.GetComponent<Collider>();
         if (collider != null)
         {
+            collider.enabled = false;
             if (Application.isPlaying)
                 Destroy(collider);
             else
@@ -407,6 +463,9 @@ public class TestPlayPresentationRuntime : MonoBehaviour
             false);
         if (first == null)
             return new Transform[0];
+        first.GetComponent<TestPlayOriginalEffect>()?.UseForwardAnchoredQuad(flipVerticalUv: layerName == "Primary");
+        if (layerName == "Line")
+        { first.name = "TestPlaySwordBeam_Line_0"; first.transform.SetParent(parent, false); return new[] { first.transform }; }
 
         GameObject second = CreateOriginalTextureEffect(
             textureId,
@@ -416,6 +475,7 @@ public class TestPlayPresentationRuntime : MonoBehaviour
             0f,
             Color.white,
             false);
+        second?.GetComponent<TestPlayOriginalEffect>()?.UseForwardAnchoredQuad(flipVerticalUv: layerName == "Primary");
         first.name = "TestPlaySwordBeam_" + layerName + "_0";
         first.transform.SetParent(parent, false);
         if (second == null)
@@ -428,36 +488,11 @@ public class TestPlayPresentationRuntime : MonoBehaviour
 
     Transform[] CreateThunderPlanes(Transform parent, int textureId)
     {
-        if (parent == null || textureId < 0)
-            return new Transform[0];
-
-        GameObject first = CreateOriginalTextureEffect(
-            textureId,
-            Vector3.zero,
-            Quaternion.identity,
-            Vector2.one,
-            0f,
-            Color.white,
-            false);
-        if (first == null)
-            return new Transform[0];
-
-        GameObject second = CreateOriginalTextureEffect(
-            textureId,
-            Vector3.zero,
-            Quaternion.identity,
-            Vector2.one,
-            0f,
-            Color.white,
-            false);
-        first.name = "TestPlayThunderEffect_0";
-        first.transform.SetParent(parent, false);
-        if (second == null)
-            return new[] { first.transform };
-
-        second.name = "TestPlayThunderEffect_1";
-        second.transform.SetParent(parent, false);
-        return new[] { first.transform, second.transform };
+        // 0048c470 / 0047c380: p1 is CLaser history capacity, not a quad length.
+        var trail = CreateOriginalType1TrailEffect(textureId, parent.position, 1, out _);
+        if (trail == null) return new Transform[0];
+        trail.transform.SetParent(parent, true);
+        return new[] { trail.transform };
     }
 
     static void DestroyRuntimeObject(GameObject target)
@@ -527,18 +562,21 @@ public class TestPlayPresentationRuntime : MonoBehaviour
                     SuppressedSoundPlaybackCount++;
                     break;
                 }
-                if (PlayBinding(sounds, presentationEvent.symbol, soundSource, "Snd") &&
+                var emitter = presentationEvent.hasWorldPosition && Time.timeScale > 0f
+                    ? PositionalSource(presentationEvent.worldPosition) : soundSource;
+                if (presentationEvent.hasWorldPosition) LastSoundWorldPosition = presentationEvent.worldPosition;
+                if (PlayBinding(sounds, presentationEvent.symbol, emitter, "Snd") &&
                     presentationEvent.source == "Type1Projectile") Type1ShotPlaybackCount++;
                 break;
             case TestPlayPresentationEventType.Voice:
-                PlayBinding(voices, presentationEvent.symbol, voiceSource, "Voice");
+                if (!PilotOwnsVoice) PlayBinding(voices, presentationEvent.symbol, voiceSource, "Voice");
                 break;
         }
     }
 
     bool PlayBinding(List<TestPlayAudioBinding> bindings, string key, AudioSource source, string command)
     {
-        if (source == null)
+        if (source == null || Time.timeScale == 0f)
             return false;
 
         TestPlayAudioBinding binding = FindBinding(bindings, key);
@@ -551,7 +589,13 @@ public class TestPlayPresentationRuntime : MonoBehaviour
             return false;
         }
 
-        source.PlayOneShot(binding.clip, Mathf.Clamp01(binding.volume));
+        if (positionalSounds.Contains(source))
+        {
+            source.clip = binding.clip;
+            TestPlayAudioChannel.SetBaseVolume(source, binding.volume);
+            source.Play();
+        }
+        else source.PlayOneShot(binding.clip, Mathf.Clamp01(binding.volume));
         if (command == "Snd")
         {
             SoundPlaybackCount++;
@@ -621,6 +665,7 @@ public class TestPlayPresentationRuntime : MonoBehaviour
         if (voiceSource != null && voiceSource.isPlaying) count++;
         if (propulsionStartSource != null && propulsionStartSource.isPlaying) count++;
         if (propulsionSource != null && propulsionSource.isPlaying) count++;
+        foreach (var source in positionalSounds) if (source != null && source.isPlaying) count++;
         return count;
     }
 
@@ -689,10 +734,14 @@ public class TestPlayPresentationRuntime : MonoBehaviour
         ConfigureAudioSource(voiceSource);
         ConfigureAudioSource(propulsionStartSource);
         ConfigureAudioSource(propulsionSource);
+        TestPlayAudioChannel.Bind(soundSource, TestPlayAudioCategory.Sound);
+        TestPlayAudioChannel.Bind(voiceSource, TestPlayAudioCategory.Voice);
+        TestPlayAudioChannel.Bind(propulsionStartSource, TestPlayAudioCategory.Sound);
+        TestPlayAudioChannel.Bind(propulsionSource, TestPlayAudioCategory.Sound);
         propulsionStartSource.loop = false;
         propulsionSource.loop = true;
         if (!Application.isPlaying && !PropulsionLoopRequested)
-            propulsionSource.volume = 0f;
+            TestPlayAudioChannel.SetBaseVolume(propulsionSource, 0f);
     }
 
     AudioSource CreateAudioSource(string objectName)
@@ -736,18 +785,18 @@ public class TestPlayPresentationRuntime : MonoBehaviour
             : 0f;
         if (propulsionFadeSeconds <= 0f)
         {
-            propulsionSource.volume = targetVolume;
+            TestPlayAudioChannel.SetBaseVolume(propulsionSource, targetVolume);
         }
         else
         {
             float speed = 1f / propulsionFadeSeconds;
-            propulsionSource.volume = Mathf.MoveTowards(
-                propulsionSource.volume,
+            TestPlayAudioChannel.SetBaseVolume(propulsionSource, Mathf.MoveTowards(
+                TestPlayAudioChannel.GetBaseVolume(propulsionSource),
                 targetVolume,
-                speed * Time.unscaledDeltaTime);
+                speed * Time.deltaTime));
         }
 
-        if (!PropulsionLoopRequested && propulsionSource.isPlaying && propulsionSource.volume <= 0.0001f)
+        if (!PropulsionLoopRequested && propulsionSource.isPlaying && TestPlayAudioChannel.GetBaseVolume(propulsionSource) <= 0.0001f)
             propulsionSource.Stop();
     }
 }

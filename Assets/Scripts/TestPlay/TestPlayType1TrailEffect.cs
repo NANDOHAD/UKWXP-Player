@@ -28,8 +28,10 @@ public class TestPlayType1TrailEffect : MonoBehaviour
             trailRenderer = gameObject.AddComponent<LineRenderer>();
         trailRenderer.useWorldSpace = true;
         trailRenderer.alignment = LineAlignment.View;
-        trailRenderer.textureMode = LineTextureMode.Stretch;
+        trailRenderer.textureMode = LineTextureMode.DistributePerSegment;
         trailRenderer.widthMultiplier = displayWidth;
+        // 00511c60 offsets each edge by the supplied half-width.
+        trailRenderer.widthCurve = AnimationCurve.Constant(0, 1, 2);
         trailRenderer.numCapVertices = 0;
         trailRenderer.numCornerVertices = 0;
         trailRenderer.positionCount = 1;
@@ -45,12 +47,20 @@ public class TestPlayType1TrailEffect : MonoBehaviour
         };
         runtimeMaterial.SetTexture("_MainTex", texture);
         runtimeMaterial.SetColor("_TintColor", Color.white);
+        runtimeMaterial.SetFloat("_TrailUV", 1);
         trailRenderer.sharedMaterial = runtimeMaterial;
+    }
+
+    public void SetWidth(float width)
+    {
+        displayWidth = Mathf.Max(0f, width);
+        if (trailRenderer != null)
+            trailRenderer.widthMultiplier = displayWidth;
     }
 
     public void SetTrail(IReadOnlyList<Vector3> positions)
     {
-        if (trailRenderer == null || positions == null || positions.Count == 0)
+        if (trailRenderer == null || positions == null)
             return;
 
         trailRenderer.positionCount = positions.Count;

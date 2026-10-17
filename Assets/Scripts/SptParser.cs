@@ -85,12 +85,88 @@ public class SptFrameBindingInfo
     public Transform BoneTr;
 }
 
+// External model slot, distinct from GUNFILENAME's existing HOD node binding.
+public sealed class SptExternalModelInfo
+{
+    public int Id;
+    public string FileName;
+    public string SecondaryFileName;
+    public int Mode;
+}
+
+/// <summary>
+/// 原作AISettingの格納値。省略・明示値・無効値を区別する。
+/// </summary>
+public sealed class SptAiSetting
+{
+    public bool IsSpecified { get; }
+    public bool IsValid { get; }
+    // Original parser +0x48B4/+0x48B8. Values above 100 are not clamped:
+    // the original compares random % 100 with an unsigned short.
+    public ushort RangedPreference { get; }
+    public float PreferredDistance { get; }
+
+    internal SptAiSetting(bool specified = false, bool valid = true,
+        ushort rangedPreference = 0, float preferredDistance = 40f)
+    {
+        IsSpecified = specified; IsValid = valid;
+        RangedPreference = rangedPreference; PreferredDistance = preferredDistance;
+    }
+}
+
+public sealed class SptAiWeaponSetting
+{
+    public bool IsSpecified { get; }
+    public bool IsValid { get; }
+    public float MinimumDistance { get; }
+    public float MaximumDistance { get; }
+    public byte Frequency { get; }
+    // Original signed short. This is an AI eligibility threshold, not the
+    // RunProc cost. The original melee branch does not use this threshold.
+    public short EnergyThreshold { get; }
+    public int FrequencyQuotient => Frequency / 10;
+
+    internal SptAiWeaponSetting(bool specified = false, bool valid = true,
+        float minimumDistance = 0, float maximumDistance = 0, byte frequency = 0,
+        short energyThreshold = 0)
+    {
+        IsSpecified = specified; IsValid = valid;
+        MinimumDistance = minimumDistance; MaximumDistance = maximumDistance;
+        Frequency = frequency; EnergyThreshold = energyThreshold;
+    }
+
+    // FUN_004e5730: finite comparisons include BOTH endpoints, including min=max.
+    public bool ContainsDistance(float distance) => IsValid && float.IsFinite(distance) &&
+        MinimumDistance <= distance && distance <= MaximumDistance;
+}
+
 /// <summary>
 /// Script.spt 全体のランタイムデータを保持するコンテナ。
 /// パース後は BindTransforms / BuildBurnerEffects を呼び出して初期化を完了させること。
 /// </summary>
 public class SptRuntimeData
 {
+    public const int OriginalAiWeaponCount = 5;
+    public SptAiSetting AiSetting { get; internal set; } = new SptAiSetting();
+    readonly SptAiWeaponSetting[] aiWeapons = new SptAiWeaponSetting[OriginalAiWeaponCount];
+    public IReadOnlyList<SptAiWeaponSetting> AiWeapons { get; }
+    readonly List<string> aiDiagnostics = new List<string>();
+    public IReadOnlyList<string> AiDiagnostics { get; }
+
+    public SptRuntimeData()
+    {
+        for (int i = 0; i < aiWeapons.Length; i++) aiWeapons[i] = new SptAiWeaponSetting();
+        AiWeapons = Array.AsReadOnly(aiWeapons);
+        AiDiagnostics = aiDiagnostics.AsReadOnly();
+    }
+
+    internal void SetAiWeapon(int slot, SptAiWeaponSetting value) => aiWeapons[slot] = value;
+    internal void AddAiDiagnostic(string message)
+    {
+        aiDiagnostics.Add(message);
+        Debug.LogWarning(message);
+    }
+
     public const int OriginalSubLockDistanceCount = 20;
     public const int OriginalWeaponPointCount = 50;
     public const int OriginalAttackArmCount = 2;
@@ -106,6 +182,7 @@ public class SptRuntimeData
     public readonly Dictionary<int, SptFrameBindingInfo> AttackArms = new Dictionary<int, SptFrameBindingInfo>();
     public readonly Dictionary<int, SptFrameBindingInfo> GunModels = new Dictionary<int, SptFrameBindingInfo>();
     public readonly Dictionary<int, SptFrameBindingInfo> SwordModels = new Dictionary<int, SptFrameBindingInfo>();
+    public readonly Dictionary<int, SptExternalModelInfo> ExternalModels = new Dictionary<int, SptExternalModelInfo>();
 
     // ---- 基本パラメータ ----
     public string Name;
@@ -136,7 +213,14 @@ public class SptRuntimeData
 /// <summary>Script.spt テキストを解析して SptRuntimeData を返す静的パーサー。</summary>
 public static class SptParser
 {
+    static readonly Regex RxAiCommand = new Regex(@"^AI(Weapon)?Setting\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    static readonly Regex RxAiArguments = new Regex(@"^\s*\(([^()]*)\)\s*;\s*$",
+        RegexOptions.Compiled);
     static Material defaultBurnerParticleMaterial;
+    static readonly Regex RxExternalModel = new Regex(
+        @"^LoadXFile(2)?\s*\(\s*([+-]?\d+)\s*,\s*([^,]+)\s*,\s*(?:([^,]+)\s*,\s*)?([+-]?\d+)\s*\)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
     static Texture2D defaultBurnerParticleTexture;
 
     // BURNERSET(id, frameName, scale, fourthToken)
@@ -172,14 +256,31 @@ public static class SptParser
         var data = new SptRuntimeData();
         if (string.IsNullOrEmpty(sptText)) return data;
 
+        int lineNumber = 0;
         foreach (var rawLine in sptText.Split('\n'))
         {
+            lineNumber++;
             // コメント除去（ ' 以降）
             var line = rawLine;
             var commentIdx = line.IndexOf('\'');
             if (commentIdx >= 0) line = line.Substring(0, commentIdx);
             line = line.Trim();
             if (string.IsNullOrEmpty(line)) continue;
+
+            if (TryParseAiSetting(line, lineNumber, data)) continue;
+
+            var external = RxExternalModel.Match(line);
+            if (external.Success && int.TryParse(external.Groups[2].Value, out int slot) &&
+                slot >= 0 && slot < SptRuntimeData.OriginalWeaponModelCount &&
+                int.TryParse(external.Groups[5].Value, out int mode) &&
+                external.Groups[1].Success == external.Groups[4].Success)
+            {
+                string file = external.Groups[3].Value.Trim().Trim('"');
+                data.ExternalModels[slot] = new SptExternalModelInfo { Id = slot, FileName = file,
+                    SecondaryFileName = external.Groups[4].Success ? external.Groups[4].Value.Trim().Trim('"') : file,
+                    Mode = mode };
+                continue;
+            }
 
             // --- BURNERSET ---
             var mBurner = RxBurnerSet.Match(line);
@@ -286,6 +387,65 @@ public static class SptParser
 
         return data;
     }
+
+    static bool TryParseAiSetting(string line, int lineNumber, SptRuntimeData data)
+    {
+        var command = RxAiCommand.Match(line);
+        if (!command.Success) return false;
+        bool weapon = command.Groups[1].Success;
+        var arguments = RxAiArguments.Match(line.Substring(command.Length));
+        // Retain an identifiable slot even for malformed arguments so an invalid
+        // later declaration cannot silently leave an earlier weapon enabled.
+        string remainder = line.Substring(command.Length).TrimStart();
+        string[] tokens = arguments.Success ? arguments.Groups[1].Value.Split(',') :
+            (remainder.StartsWith("(") ? remainder.Substring(1).Split(',') : Array.Empty<string>());
+        int slot = -1;
+        bool hasSlot = weapon && tokens.Length > 0 &&
+            int.TryParse(tokens[0].Trim(), System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out slot) &&
+            slot >= 0 && slot < SptRuntimeData.OriginalAiWeaponCount;
+
+        if (!weapon)
+        {
+            bool valid = arguments.Success && tokens.Length == 2 &&
+                ushort.TryParse(tokens[0].Trim(), System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out _) &&
+                TryParseAiFloat(tokens[1], out _);
+            data.AiSetting = valid ? new SptAiSetting(true, true,
+                ushort.Parse(tokens[0].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                float.Parse(tokens[1].Trim(), System.Globalization.CultureInfo.InvariantCulture)) :
+                new SptAiSetting(true, false);
+            if (!valid) data.AddAiDiagnostic(AiDiagnostic(lineNumber, "AISetting"));
+        }
+        else
+        {
+            bool valid = arguments.Success && tokens.Length == 5 && hasSlot &&
+                TryParseAiFloat(tokens[1], out float minimum) &&
+                TryParseAiFloat(tokens[2], out float maximum) && minimum <= maximum &&
+                byte.TryParse(tokens[3].Trim(), System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out _) &&
+                short.TryParse(tokens[4].Trim(), System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out _);
+            if (hasSlot)
+                data.SetAiWeapon(slot, valid ? new SptAiWeaponSetting(true, true,
+                    float.Parse(tokens[1].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                    float.Parse(tokens[2].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                    byte.Parse(tokens[3].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                    short.Parse(tokens[4].Trim(), System.Globalization.CultureInfo.InvariantCulture)) :
+                    new SptAiWeaponSetting(true, false));
+            if (!valid) data.AddAiDiagnostic(AiDiagnostic(lineNumber, "AIWeaponSetting"));
+        }
+        return true;
+    }
+
+    static bool TryParseAiFloat(string token, out float value) => float.TryParse(token.Trim(),
+        System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture,
+        out value) && float.IsFinite(value);
+
+    // Unity safety policy: reject malformed/out-of-storage-range values rather
+    // than emulate the original parser's narrowing wrap or out-of-bounds writes.
+    static string AiDiagnostic(int line, string command) =>
+        $"[SptParser] AI設定を無効化しました: 行{line} {command}（構文・値・範囲を確認してください）。";
 
     /// <summary>
     /// キャラクターのルート Transform 以下を再帰的に検索し、
