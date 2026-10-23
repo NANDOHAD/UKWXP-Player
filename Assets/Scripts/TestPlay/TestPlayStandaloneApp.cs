@@ -25,13 +25,14 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
     public bool IsBusy { get; private set; }
     public bool IsReady { get; private set; }
     public bool LastOperationSucceeded { get; private set; }
-    public string Message => message;
+    public string Message => message();
     public string DataRoot => dataRoot;
     public string MechsRoot => mechsRoot;
     public IReadOnlyList<string> MechNames => mechNames;
     public IReadOnlyList<TestPlayPilotData> Pilots => pilots;
     public string PilotsRoot { get; private set; }
-    public string PilotMessage { get; private set; } = "";
+    public string PilotMessage => pilotMessage();
+    Func<string> pilotMessage = () => "";
     public TestPlayPilotData FirstPilot => PilotAt(firstPilotIndex);
     public TestPlayPilotData SecondPilot => PilotAt(secondPilotIndex);
     readonly List<TestPlayPilotData> pilots = new List<TestPlayPilotData>();
@@ -48,7 +49,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         OpponentCpuSettings = settings ?? throw new ArgumentNullException(nameof(settings));
         selectionView?.RefreshSelection();
     }
-    public string Phase { get; private set; } = "初期化中";
+    public string Phase { get; private set; } = "";
     public bool CanCancel => IsBusy && cancellation != null && !cancellation.IsCancellationRequested && !quitting;
     string dataRoot = "";
     string mechsRoot = "";
@@ -57,7 +58,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
     readonly Dictionary<string, string> mechDescriptions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, Texture2D> selectionImages = new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
     int firstIndex, secondIndex;
-    string message = "機体フォルダから自機と相手機を選んでください。";
+    Func<string> message = () => TestPlayLocalization.Text("機体フォルダから自機と相手機を選んでください。");
     TestPlaySessionBootstrap host;
     TestPlaySelectionView selectionView;
     Camera gameCamera;
@@ -70,7 +71,8 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
     public int BgmIndex { get; private set; } = -1;
     public TestPlayStageData SelectedMap => MapIndex >= 0 && MapIndex < Maps.Count ? Maps[MapIndex] : null;
     public string SelectedBgm => BgmIndex >= 0 && BgmIndex < BgmFiles.Count ? BgmFiles[BgmIndex] : null;
-    public string EnvironmentMessage { get; private set; } = "";
+    public string EnvironmentMessage => environmentMessage();
+    Func<string> environmentMessage = () => "";
     public TestPlayBgmPlayer Music { get; private set; }
     public TestPlayStageRuntime Stage { get; private set; }
 
@@ -107,7 +109,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
             mechsRoot = Path.Combine(dataRoot, "Robo");
         }
         await ExecuteAsync(async token => {
-            SetPhase("初期化中", false);
+            SetPhase(TestPlayLocalization.Text("初期化中"), false);
             if (!Application.isEditor && Application.platform == RuntimePlatform.WindowsPlayer &&
                 !Assimp.Unmanaged.AssimpLibrary.Instance.LibraryLoaded)
                 Assimp.Unmanaged.AssimpLibrary.Instance.LoadLibrary(
@@ -124,7 +126,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
             {
                 await LoadSceneAsync(BattleScene);
                 BindBattle();
-                SetPhase("検証中", false);
+                SetPhase(TestPlayLocalization.Text("検証中"), false);
                 if (!string.IsNullOrEmpty(presentation))
                 {
                     var report = await TestPlayPresentationVerification.RunAsync(first, presentation, gameCamera, token, host.presentationTemplate);
@@ -172,7 +174,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         {
             try
             {
-                await TestPlayIntegrationPresentationVerification.StartVerification(integrationOutput);
+                await TestPlayIntegrationPresentationVerification.StartVerification(integrationOutput, Argument("--verify-graphics") == "true");
                 if (!Application.isEditor) Application.Quit(TestPlayIntegrationPresentationVerification.Current.state == "Succeeded" ? 0 : 1);
             }
             catch (Exception e)
@@ -208,7 +210,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         if (IsBusy) return;
         ConfigureRoots(root);
         try { Music.Stop(); RefreshMechList(); RefreshPilots(); RefreshEnvironment(); }
-        catch (Exception e) { message = "機体一覧を読み込めません: " + e.Message; }
+        catch (Exception e) { message = () => TestPlayLocalization.Text("機体一覧を読み込めません: ") + e.Message; }
         selectionView?.Bind(this);
     }
 
@@ -242,10 +244,10 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
             MapIndex = Maps.FindIndex(m => string.Equals(m.DirectoryPath, map, StringComparison.OrdinalIgnoreCase));
             if (MapIndex < 0 && Maps.Count > 0) MapIndex = 0;
             BgmIndex = BgmFiles.FindIndex(p => string.Equals(p, bgm, StringComparison.OrdinalIgnoreCase));
-            EnvironmentMessage = Maps.Count + "マップ ／ " + BgmFiles.Count + "曲";
-            if (diagnostics.Count > 0) EnvironmentMessage += "\n" + string.Join("\n", diagnostics);
+            environmentMessage = () => TestPlayLocalization.Text("{0}マップ ／ {1}曲", Maps.Count, BgmFiles.Count);
+            if (diagnostics.Count > 0) { var previous = environmentMessage; environmentMessage = () => previous() + "\n" + string.Join("\n", diagnostics); }
         }
-        catch (Exception e) { EnvironmentMessage = "マップ・BGM一覧を読み込めません: " + e.Message; }
+        catch (Exception e) { environmentMessage = () => TestPlayLocalization.Text("マップ・BGM一覧を読み込めません: ") + e.Message; }
     }
     public void SelectMap(int index)
     { if (IsBusy || index < 0 || index >= Maps.Count) return; MapIndex = index; selectionView?.RefreshSelection(); }
@@ -255,7 +257,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
     {
         if (IsBusy) return;
         try { await Music.PlayAsync(SelectedBgm); }
-        catch (Exception e) { EnvironmentMessage = e.Message; selectionView?.RefreshSelection(); }
+        catch (Exception e) { environmentMessage = () => e.Message; selectionView?.RefreshSelection(); }
     }
 
     public void SelectPilot(bool opponent, int index)
@@ -284,10 +286,10 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
             pilots.AddRange(TestPlayPilotData.Scan(PilotsRoot, diagnostics));
             firstPilotIndex = pilots.FindIndex(p => string.Equals(p.DirectoryPath, first, StringComparison.OrdinalIgnoreCase));
             secondPilotIndex = pilots.FindIndex(p => string.Equals(p.DirectoryPath, second, StringComparison.OrdinalIgnoreCase));
-            PilotMessage = pilots.Count == 0 ? "パイロットデータなし（パイロットなしで出撃できます）" : pilots.Count + "人のパイロットを読み込みました。";
-            if (diagnostics.Count > 0) PilotMessage += "\n" + string.Join("\n", diagnostics);
+            pilotMessage = () => pilots.Count == 0 ? TestPlayLocalization.Text("パイロットデータなし（パイロットなしで出撃できます）") : TestPlayLocalization.Text("{0}人のパイロットを読み込みました。", pilots.Count);
+            if (diagnostics.Count > 0) { var previous = pilotMessage; pilotMessage = () => previous() + "\n" + string.Join("\n", diagnostics); }
         }
-        catch (Exception e) { PilotMessage = "パイロット一覧を読み込めません: " + e.Message; }
+        catch (Exception e) { pilotMessage = () => TestPlayLocalization.Text("パイロット一覧を読み込めません: ") + e.Message; }
     }
 
     public string DisplayNameAt(int index) => GetDisplayName(SelectedName(index));
@@ -313,16 +315,22 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         ReleaseImages();
         if (SelectedMap != null)
         {
-            SetPhase("マップを読み込み中: " + SelectedMap.Name, false);
+            SetPhase(TestPlayLocalization.Text("マップを読み込み中: ") + SelectedMap.Name, false);
             Stage = new GameObject("LoadedStage").AddComponent<TestPlayStageRuntime>();
             await Stage.LoadAsync(SelectedMap, gameCamera, token);
             Stage.PlacePlayers(playerSlot, opponentSlot);
             var environment = GameObject.Find("StandaloneGround");
             if (environment != null) environment.SetActive(false);
         }
-        SetPhase("機体データを読み込み中", false);
+        SetPhase(TestPlayLocalization.Text("機体データを読み込み中"), false);
         await host.StartWithCpuAsync(first, second, OpponentCpuSettings, token);
         token.ThrowIfCancellationRequested();
+        if (host.Session != null)
+        {
+            float combatDistance = 0;
+            foreach (var mech in host.Session.Mechs) combatDistance = Mathf.Max(combatDistance, mech.Controller.GetConfiguredLockDistance());
+            FindFirstObjectByType<TestPlayStageAtmosphere>()?.SetCombatDistance(combatDistance);
+        }
         FindFirstObjectByType<TestPlayPilotBattle>()?.Bind(host.Session, FirstPilot, SecondPilot);
         await Music.PlayAsync(SelectedBgm, token);
         UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null);
@@ -332,7 +340,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
     {
         if (IsBusy || quitting || host == null || host.Status != "Running") return Task.CompletedTask;
         return ExecuteAsync(async token => {
-            SetPhase("再戦の準備中", false);
+            SetPhase(TestPlayLocalization.Text("再戦の準備中"), false);
             await host.RestartAsync(token);
             FindFirstObjectByType<TestPlayPilotBattle>()?.Bind(host.Session, FirstPilot, SecondPilot);
             UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null);
@@ -349,7 +357,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
     {
         if (!CanCancel) return;
         cancellation.Cancel();
-        SetPhase("読込を中止しています", false);
+        SetPhase(TestPlayLocalization.Text("読込を中止しています"), false);
     }
 
     public async Task QuitAsync()
@@ -377,16 +385,16 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
 
     async Task ExecuteCoreAsync(Func<CancellationToken, Task> action, CancellationToken token)
     {
-        try { await action(token); message = ""; LastOperationSucceeded = true; }
+        try { await action(token); message = () => ""; LastOperationSucceeded = true; }
         catch (Exception e)
         {
-            message = e is OperationCanceledException ? "読込を中止しました。" : "読み込みに失敗しました: " + e.Message;
+            message = () => e is OperationCanceledException ? TestPlayLocalization.Text("読込を中止しました。") : TestPlayLocalization.Text("読み込みに失敗しました: ") + e.Message;
             try
             {
                 await StopBattleAsync();
                 if (!quitting) { await LoadSceneAsync(SelectionScene); BindSelection(); IsReady = true; }
             }
-            catch (Exception recovery) { message += "\n選択画面への復帰に失敗しました: " + recovery.Message; Debug.LogException(recovery); }
+            catch (Exception recovery) { var previous = message; message = () => previous() + TestPlayLocalization.Text("\n選択画面への復帰に失敗しました: ") + recovery.Message; Debug.LogException(recovery); }
         }
         finally
         {
@@ -400,7 +408,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
     {
         Music?.Stop();
         FindFirstObjectByType<TestPlayPilotBattle>()?.Unbind();
-        SetPhase("戦闘を終了しています", false);
+        SetPhase(TestPlayLocalization.Text("戦闘を終了しています"), false);
         if (host == null) host = FindFirstObjectByType<TestPlayBattleView>()?.sessionHost;
         if (host != null) await host.StopAsync();
         if (Stage != null) { Stage.Release(); Destroy(Stage.gameObject); Stage = null; }
@@ -410,7 +418,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
     async Task LoadSceneAsync(string path)
     {
         if (SceneManager.GetActiveScene().path == path) return;
-        SetPhase(path == SelectionScene ? "機体選択画面を読み込み中" : "戦闘シーンを読み込み中", true);
+        SetPhase(path == SelectionScene ? TestPlayLocalization.Text("機体選択画面を読み込み中") : TestPlayLocalization.Text("戦闘シーンを読み込み中"), true);
         // Unity scene loads cannot be cancelled midway. Finish activation, then honour cancellation
         // before loading mechs; cleanup and return to selection use the same serialized flow.
         var load = SceneManager.LoadSceneAsync(path, LoadSceneMode.Single);
@@ -434,6 +442,18 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         host = sessionHost = view.sessionHost;
         gameCamera = view.gameCamera; host.gameCamera = gameCamera;
         hudCanvas = host.hudCanvas; playerSlot = host.playerSlot; opponentSlot = host.opponentSlot;
+        // G2 presentation-only lighting; the scene owns this single light/component.
+        var sun = GameObject.Find("StandaloneLight");
+        if (sun == null || sun.GetComponent<Light>() == null)
+            throw new InvalidOperationException("戦闘の主光源がありません。");
+        var lighting = sun.GetComponent<TestPlayStageLighting>();
+        if (lighting == null) lighting = sun.AddComponent<TestPlayStageLighting>();
+        lighting.Apply(SelectedMap?.Name);
+        var atmosphere = sun.GetComponent<TestPlayStageAtmosphere>();
+        if (atmosphere == null) atmosphere = sun.AddComponent<TestPlayStageAtmosphere>();
+        atmosphere.Apply(SelectedMap?.Name);
+        if (gameCamera.GetComponent<TestPlayStagePostProcessing>() == null)
+            gameCamera.gameObject.AddComponent<TestPlayStagePostProcessing>();
         view.Bind(this);
     }
 
@@ -475,7 +495,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
 
         if (string.IsNullOrWhiteSpace(mechsRoot))
         {
-            message = "機体ルートフォルダを指定してください。";
+            message = () => TestPlayLocalization.Text("機体ルートフォルダを指定してください。");
             return;
         }
 
@@ -483,7 +503,7 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
         mechsRoot = root;
         if (!Directory.Exists(root))
         {
-            message = "機体ルートフォルダがありません: " + root;
+            message = () => TestPlayLocalization.Text("機体ルートフォルダがありません: ") + root;
             return;
         }
 
@@ -502,13 +522,13 @@ public sealed class TestPlayStandaloneApp : MonoBehaviour
 
         if (mechNames.Count == 0)
         {
-            message = "AN2形式のScript.aniがある機体フォルダがみつかりません。";
+            message = () => TestPlayLocalization.Text("AN2形式のScript.aniがある機体フォルダがみつかりません。");
             return;
         }
 
         firstIndex = IndexOfName(previousFirst);
         secondIndex = IndexOfName(previousSecond);
-        message = mechNames.Count + "機の機体フォルダを読み込みました。";
+        message = () => TestPlayLocalization.Text("{0}機の機体フォルダを読み込みました。", mechNames.Count);
     }
 
     /// <summary>1行目の表示名と2～6行目の説明を読む。欠損時はフォルダ名と空の説明を返す。</summary>

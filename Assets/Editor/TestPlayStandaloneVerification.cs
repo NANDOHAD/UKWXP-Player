@@ -152,19 +152,32 @@ public static class TestPlayStandaloneVerification
     {
         // Isolated AN2/X/SPT fixtures: never change the real mech or its source models.
         foreach (string precision in new[] { "0032", "0064" })
-        foreach (bool encrypted in new[] { false, true })
+        foreach (string encryption in new[] { "plain", "encrypted", "plain-first-mixed", "encrypted-first-mixed" })
         foreach (bool emptyMesh in new[] { false, true })
         {
-            string label = precision + (encrypted ? "-encrypted" : "-plain") + (emptyMesh ? "-empty-mesh" : "-frame");
+            bool encrypted = encryption != "plain";
+            string label = precision + "-" + encryption + (emptyMesh ? "-empty-mesh" : "-frame");
             string folder = Path.Combine(outputFolder, "meshless-models", label);
             Directory.CreateDirectory(folder);
             var coder = new CypherTranscoder { cypher = encrypted ? 0x0B7E7759u : 0u };
             string header = "xof 0303txt " + precision + "\n";
             string pivot = header + (emptyMesh ? "Mesh Empty { 0; 0; }" : "Frame Pivot { Frame Nested { } }");
             string visible = header + "Frame Container { Frame Child { Mesh Visible {\n" +
-                "3;\n0.0;0.0;0.0;,\n1.0;0.0;0.0;,\n0.0;1.0;0.0;;\n1;\n3;0,1,2;;\n} } }";
-            File.WriteAllBytes(Path.Combine(folder, "pivot.x"), coder.Transcode(System.Text.Encoding.UTF8.GetBytes(pivot)));
-            File.WriteAllBytes(Path.Combine(folder, "visible.x"), coder.Transcode(System.Text.Encoding.UTF8.GetBytes(visible)));
+                "3;\n0.0;0.0;0.0;,\n1.0;0.0;0.0;,\n0.0;1.0;0.0;;\n1;\n3;0,1,2;;\n" +
+                "MeshMaterialList { 1; 1; 0;; Material Surface { 1;1;1;1;; 1; 0;0;0;; 0;0;0;; " +
+                "TextureFilename { \"fixture.png\"; } } } } } }";
+            byte[] pivotBytes = System.Text.Encoding.UTF8.GetBytes(pivot);
+            byte[] visibleBytes = System.Text.Encoding.UTF8.GetBytes(visible);
+            File.WriteAllBytes(Path.Combine(folder, "pivot.x"), encryption == "plain-first-mixed" ? pivotBytes : coder.Transcode(pivotBytes));
+            File.WriteAllBytes(Path.Combine(folder, "visible.x"), encryption == "encrypted-first-mixed" ? visibleBytes : coder.Transcode(visibleBytes));
+            var textureFixture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            try
+            {
+                textureFixture.SetPixels(new[] { Color.red, Color.green, Color.blue, Color.white });
+                textureFixture.Apply();
+                File.WriteAllBytes(Path.Combine(folder, "fixture.png"), coder.Transcode(textureFixture.EncodeToPNG()));
+            }
+            finally { UnityEngine.Object.DestroyImmediate(textureFixture); }
             File.WriteAllBytes(Path.Combine(folder, "Script.spt"), coder.Transcode(USEncoder.ToEncoding.ToSJIS("WEAPONPOINT(0, pivot.x, UP)\r\n")));
             var structure = new hod2v0("meshless") { parts = new List<hod2v0_Part> {
                 new hod2v0_Part { name = "root", childCount = 1, scale = Vector3.one, rotation = Quaternion.identity },
@@ -186,6 +199,7 @@ public static class TestPlayStandaloneVerification
             check(loaded.sourceFormat == AniContainerFormat.An2 && loaded.structure.parts.Count == 3 &&
                 loaded.animations[0].frames[0].parts[1].position == structure.parts[1].position, label + " AN2 save/reload");
             MechAssetLease lease = null;
+            MechAssetLease secondLease = null;
             int rootsBefore = UnityEngine.Object.FindObjectsByType<RoboStructure>(FindObjectsSortMode.None).Length;
             var diagnostics = new List<string>();
             Application.LogCallback capture = (message, stack, type) => {
@@ -197,6 +211,7 @@ public static class TestPlayStandaloneVerification
                 lease = await UnityMechBuilder.BuildAsync(loaded, path, token);
                 var robo = lease.Robo;
                 check(diagnostics.Count == 0, label + " no import warnings");
+                check(robo.transcoder.cypher == coder.cypher, label + " folder key retained for SPT and textures");
                 check(robo.parts.Count == 3 && robo.parts[2].transform.parent == robo.parts[1].transform,
                     label + " transform-only parent and child retained");
                 check(GetMesh(robo.parts[1]) == null && robo.parts[1].GetComponent<MeshRenderer>() == null,
@@ -209,9 +224,18 @@ public static class TestPlayStandaloneVerification
                 check(lease.Spt.WeaponPoints[0].BoneTr == robo.parts[1].transform, label + " SPT binds meshless part");
                 var mesh = GetMesh(robo.parts[2]);
                 var root = robo.root;
+                var texture = robo.parts[2].GetComponent<MeshRenderer>().sharedMaterial.mainTexture as Texture2D;
+                check(texture != null && texture.width == 2 && texture.GetPixel(0, 0) == Color.red,
+                    label + " texture decoded with folder key");
+                secondLease = await UnityMechBuilder.BuildAsync(loaded, path, token);
+                var secondTexture = secondLease.Robo.parts[2].GetComponent<MeshRenderer>().sharedMaterial.mainTexture;
+                check(secondTexture != null && texture != secondTexture, label + " independent texture ownership");
                 await lease.ReleaseAsync();
                 check(root == null && mesh == null && lease.RemainingOwnedAssetCount == 0, label + " release all assets");
+                check(texture == null && secondTexture != null, label + " release preserves other mech texture");
                 lease = null;
+                await secondLease.ReleaseAsync();
+                secondLease = null;
                 // An unreadable model must not be mistaken for a successfully parsed empty model.
                 File.WriteAllBytes(Path.Combine(folder, "pivot.x"), new byte[0]);
                 bool rejected = false;
@@ -225,6 +249,7 @@ public static class TestPlayStandaloneVerification
             {
                 Application.logMessageReceived -= capture;
                 if (lease != null) await lease.ReleaseAsync();
+                if (secondLease != null) await secondLease.ReleaseAsync();
             }
         }
     }

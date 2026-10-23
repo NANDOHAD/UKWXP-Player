@@ -67,6 +67,45 @@ public class TestPlayCameraController : MonoBehaviour
 
     public bool cameraModeActive { get; private set; }
     public bool usingLockTarget { get; private set; }
+    public bool PauseCameraActive { get; private set; }
+    Vector3 pauseOffset = new Vector3(0, 0, -5);
+    Vector2 pauseAngles;
+    Pose poseBeforePauseCamera;
+    float fovBeforePauseCamera;
+
+    public bool EnterPauseCamera()
+    {
+        if (PauseCameraActive) return true;
+        if (!cameraModeActive || controlledCamera == null || GetPlayerRoot() == null || Time.timeScale != 0f)
+            return false;
+        poseBeforePauseCamera = new Pose(controlledCamera.transform.position, controlledCamera.transform.rotation);
+        fovBeforePauseCamera = controlledCamera.fieldOfView;
+        PauseCameraActive = true;
+        ApplyPauseCameraInput(Vector3.zero, Vector2.zero, false, false, 0);
+        return true;
+    }
+
+    public void ExitPauseCamera()
+    {
+        if (!PauseCameraActive) return;
+        PauseCameraActive = false;
+        if (controlledCamera == null) return;
+        controlledCamera.transform.SetPositionAndRotation(poseBeforePauseCamera.position, poseBeforePauseCamera.rotation);
+        controlledCamera.fieldOfView = fovBeforePauseCamera;
+    }
+
+    public void ApplyPauseCameraInput(Vector3 translation, Vector2 rotation, bool fast, bool reset, float seconds)
+    {
+        if (!PauseCameraActive || controlledCamera == null || controller == null || Time.timeScale != 0f) return;
+        // 原作確定: 004c9730 mode1: offset(0,0,-5), 0.03/回・1度/回、Shift倍速、R初期化。
+        // Unity代替: 描画frame依存を避けunscaled秒を60Hz相当へ換算。X→Y回転をUnity座標へ合成。
+        float steps = Mathf.Max(0, seconds) * 60f * (fast ? 2f : 1f);
+        pauseOffset += translation * (.03f * steps);
+        pauseAngles += rotation * steps;
+        if (reset) { pauseOffset = new Vector3(0, 0, -5); pauseAngles = Vector2.zero; }
+        var orientation = Quaternion.AngleAxis(pauseAngles.y, Vector3.up) * Quaternion.AngleAxis(pauseAngles.x, Vector3.right);
+        controlledCamera.transform.SetPositionAndRotation(controller.CameraEffectPivot + orientation * pauseOffset, orientation);
+    }
 
     Vector3 savedPosition;
     Quaternion savedRotation;
@@ -166,6 +205,7 @@ public class TestPlayCameraController : MonoBehaviour
 
     void LateUpdate()
     {
+        if (PauseCameraActive) return;
         if (!cameraModeActive || controller == null || !controller.playModeActive || Time.timeScale == 0f)
             return;
 
@@ -223,6 +263,7 @@ public class TestPlayCameraController : MonoBehaviour
         }
 
         cameraModeActive = true;
+        pauseOffset = new Vector3(0, 0, -5); pauseAngles = Vector2.zero;
         usingLockTarget = false;
         positionVelocity = Vector3.zero;
         hasPreviousPlayerPivot = false;
@@ -239,6 +280,7 @@ public class TestPlayCameraController : MonoBehaviour
 
     public void ExitTestPlayCamera()
     {
+        ExitPauseCamera();
         if (!cameraModeActive)
             return;
 

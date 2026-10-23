@@ -545,23 +545,9 @@ public static class SptParser
         if (defaultBurnerParticleMaterial != null)
             return defaultBurnerParticleMaterial;
 
-        Shader shader = null;
-        if (UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline != null)
-            shader = Shader.Find("Universal Render Pipeline/Particles/Unlit");
-        if (shader == null)
-            shader = Shader.Find("Legacy Shaders/Particles/Additive");
-        if (shader == null)
-            shader = Shader.Find("Particles/Standard Unlit");
-        if (shader == null)
-            shader = Shader.Find("Sprites/Default");
-        if (shader == null)
-            return null;
-
-        defaultBurnerParticleMaterial = new Material(shader)
-        {
-            name = "TestPlayDefaultBurnerParticleMaterial",
-            hideFlags = HideFlags.HideAndDontSave
-        };
+        defaultBurnerParticleMaterial = WindomRenderMaterials.CreateBurnerParticle();
+        defaultBurnerParticleMaterial.name = "TestPlayDefaultBurnerParticleMaterial";
+        defaultBurnerParticleMaterial.hideFlags = HideFlags.HideAndDontSave;
         Texture2D particleTexture = GetDefaultBurnerParticleTexture();
         if (defaultBurnerParticleMaterial.HasProperty("_MainTex"))
             defaultBurnerParticleMaterial.SetTexture("_MainTex", particleTexture);

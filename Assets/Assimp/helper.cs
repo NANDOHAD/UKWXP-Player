@@ -29,7 +29,7 @@ public static class Helper
         {
             Texture2D result;
 
-            if (!TextureCache.TryGetValue(path, out result))
+            if (!TextureCache.TryGetValue(path, out result) || result == null)
             {
                 result = new Texture2D(0, 0);
                 result.LoadImage(File.ReadAllBytes(path));
@@ -41,10 +41,17 @@ public static class Helper
         }
 
         public static Texture2D LoadTextureEncrypted(string path, ref CypherTranscoder transcoder)
+            => LoadTextureEncrypted(path, ref transcoder, null);
+
+        public static Texture2D LoadTextureEncrypted(string path, ref CypherTranscoder transcoder,
+            Dictionary<string, Texture2D> textureCache)
         {
             Texture2D result;
+            // Runtime leases supply a private cache so releasing one mech cannot
+            // destroy textures borrowed by another mech or the editor preview.
+            var cache = textureCache ?? TextureCache;
 
-            if (!TextureCache.TryGetValue(path, out result))
+            if (!cache.TryGetValue(path, out result) || result == null)
             {
                 result = new Texture2D(0, 0);
                 byte[] imageData = transcoder.Transcode(path);
@@ -60,7 +67,7 @@ public static class Helper
                 }
 
                 result.name = Path.GetFileNameWithoutExtension(path);
-                TextureCache[path] = result;
+                cache[path] = result;
             }
 
             return result;

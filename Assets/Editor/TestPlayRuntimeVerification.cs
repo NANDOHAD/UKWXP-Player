@@ -18,6 +18,8 @@ public static class TestPlayRuntimeVerification
     public static int RunAll()
     {
         int assertions = 0;
+        assertions += TestPlayTransformationVerification.VerifyCore();
+        assertions += TestPlaySpecialFacingVerification.VerifyCore();
         assertions += TestPlayCpuDataVerification.VerifyParser();
         assertions += TestPlayCpuVerification.RunCore();
         assertions += TestPlayCpuVerification.RunAdvanced();
@@ -1136,12 +1138,16 @@ public static class TestPlayRuntimeVerification
                 "attack energy recovers every tick even airborne, independently of movement energy", ref assertions);
             controller.state.SetInt(151, 1);
             controller.currentAnimationIndex = 100;
+            typeof(TestPlayController).GetField("currentActionSelection", InstancePrivate).SetValue(controller,
+                TestPlayActionCore.Resolve(100, TestPlayWeaponMode.Gun, null, null));
             resetBlock.Invoke(controller, null);
             auxiliaryTick.Invoke(controller, null);
             Require(controller.currentAuxiliaryEnergy == 1633,
                 "secondary-channel block entry preserves the recovery rate", ref assertions);
             controller.state.SetInt(151, 0);
             controller.currentAnimationIndex = 130;
+            typeof(TestPlayController).GetField("currentActionSelection", InstancePrivate).SetValue(controller,
+                TestPlayActionCore.Resolve(130, TestPlayWeaponMode.Gun, null, null));
             resetBlock.Invoke(controller, null);
             auxiliaryTick.Invoke(controller, null);
             Require(controller.currentAuxiliaryEnergy == 1633,
@@ -1804,6 +1810,28 @@ public static class TestPlayRuntimeVerification
             Require((int)resolveMelee.Invoke(controller, new object[] { 8 }) == controller.switchToSwordAction,
                 "gun-mode C first selects weapon-switch action 18", ref assertions);
 
+            // Delta's real action 18 has HOD poses but no script blocks.
+            // Poses alone must not route input into an unfinishable switch.
+            var swordSwitch = robo.ani.animations[controller.switchToSwordAction];
+            var gunSwitch = robo.ani.animations[controller.switchToGunAction];
+            var swordSwitchScripts = swordSwitch.scripts;
+            var gunSwitchScripts = gunSwitch.scripts;
+            swordSwitch.frames.Add(new hod2v1("pose-only switch"));
+            gunSwitch.frames.Add(new hod2v1("pose-only switch"));
+            swordSwitch.scripts = new List<script>();
+            gunSwitch.scripts = null;
+            Require((int)resolveMelee.Invoke(controller, new object[] { 0 }) == controller.neutralMeleeAction &&
+                    (int)resolveMelee.Invoke(controller, new object[] { 8 }) == controller.meleeAction,
+                "pose-only sword switch is skipped for neutral and forward C", ref assertions);
+            controller.state.SetInt(152, 1);
+            Require((int)resolveShot.Invoke(controller, null) == controller.shotAction,
+                "pose-only gun switch with null scripts is skipped for X", ref assertions);
+            controller.state.SetInt(152, 0);
+            swordSwitch.scripts = swordSwitchScripts;
+            gunSwitch.scripts = gunSwitchScripts;
+            swordSwitch.frames.Clear();
+            gunSwitch.frames.Clear();
+
             controller.ChangeAnimation(controller.switchToSwordAction);
             tickAnimation.Invoke(controller, null);
             Require(controller.state.GetInt(152) == 1 && controller.heldWeapon == "SWORD" &&
@@ -2154,7 +2182,7 @@ public static class TestPlayRuntimeVerification
                     primaryUv != null && primaryUv.Length == 4 &&
                     primaryVertices[0] == new Vector3(-0.5f, 0f, 0f) &&
                     primaryVertices[3] == new Vector3(0.5f, 1f, 0f) &&
-                    primaryUv[0] == new Vector2(0f, 1f) && primaryUv[3] == new Vector2(1f, 0f) &&
+                    primaryUv[0] == new Vector2(0f, 0f) && primaryUv[3] == new Vector2(1f, 1f) &&
                     primaryPlane0.localPosition == Vector3.zero && primaryPlane1.localPosition == Vector3.zero &&
                     Vector3.Dot(primaryPlane0.TransformDirection(Vector3.up).normalized,
                         swordBeam.transform.forward) > 0.999f &&
@@ -2162,7 +2190,7 @@ public static class TestPlayRuntimeVerification
                         swordBeam.transform.forward) > 0.999f &&
                     Mathf.Abs(Vector3.Dot(primaryPlane0.forward, primaryPlane1.forward)) < 0.001f &&
                     !swordBeam.IsLineBlurVisible,
-                "primary adapters use the original forward-anchored UV quad, follow local Z+ while crossed, and Beam_Line starts hidden",
+                "primary adapters use accepted root V0 / tip V1, follow local Z+ while crossed, and Beam_Line starts hidden",
                 ref assertions);
             weaponPointObject.transform.SetPositionAndRotation(
                 new Vector3(1f, 2f, 3f),
@@ -2996,7 +3024,7 @@ public static class TestPlayRuntimeVerification
         }
     }
 
-    static void VerifyOriginalSubweaponChannels(ref int assertions)
+    public static void VerifyOriginalSubweaponChannels(ref int assertions)
     {
         var host = new GameObject("SubweaponChannelVerification");
         try
@@ -3038,6 +3066,54 @@ public static class TestPlayRuntimeVerification
             tick.Invoke(controller, null);
             Require(controller.currentAnimationIndex == 104 && controller.state.GetInt(180) == 0,
                 "main-channel transition prevents stale secondary-channel execution", ref assertions);
+            foreach (int channel in new[] { 0, 1, 2 })
+            {
+                controller.state.SetInt(178, 0); controller.state.SetInt(179, 0);
+                robo.ani.animations[104].scripts = new List<script> { new script { time = 0,
+                    squirrel = "ChangeAnime(127,0," + channel + ");" } };
+                robo.ani.animations[127].scripts = new List<script> { new script { unk = 5, time = 0,
+                    squirrel = "IF(@int[151],==,0); @int[178]+=1; Move=(0,0,0.5); ENDIF;" +
+                        "IF(@int[151],==,1); @int[179]+=1; ENDIF;" } };
+                controller.ChangeAnimation(0);
+                controller.ChangeAnimation(104); tick.Invoke(controller, null);
+                tick.Invoke(controller, null);
+                Require(controller.currentAnimationIndex == 127 &&
+                    controller.state.GetInt(178) == (channel == 1 ? 0 : 1) &&
+                    controller.state.GetInt(179) == (channel == 0 ? 0 : 1),
+                    "ChangeAnime explicit channel " + channel + " survives arbitrary ANI slot", ref assertions);
+                Require(controller.CurrentActionSelection.primaryChannel == (channel == 1 ? 1 : 0) &&
+                    controller.CurrentActionSelection.UsesDualChannels == (channel == 2),
+                    "ChangeAnime exposes selected channel " + channel, ref assertions);
+            }
+
+            // SPT read compatibility: original aligned plaintext terminal word and
+            // existing editor full-word encryption both retain the final model slot.
+            string folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "WindomSpt-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(folder);
+            try
+            {
+                robo.folder = folder; robo.transcoder = new CypherTranscoder();
+                string text = "LoadXFile(13,Avalon light.x,0);\r\n";
+                while (USEncoder.ToEncoding.ToSJIS(text).Length % 4 != 0) text = " " + text;
+                byte[] plain = USEncoder.ToEncoding.ToSJIS(text);
+                foreach (bool original in new[] { true, false })
+                {
+                    byte[] encoded = robo.transcoder.Transcode((byte[])plain.Clone());
+                    if (original) Array.Copy(plain, plain.Length - 4, encoded, encoded.Length - 4, 4);
+                    string path = System.IO.Path.Combine(folder, "Script.spt");
+                    System.IO.File.WriteAllBytes(path, encoded);
+                    string read = MechLoader.ReadSpt(robo);
+                    Require(read == text && SptParser.Parse(read).ExternalModels.ContainsKey(13),
+                        "SPT terminal model survives " + (original ? "original" : "editor") + " encryption", ref assertions);
+                    Require(Convert.ToBase64String(System.IO.File.ReadAllBytes(path)) == Convert.ToBase64String(encoded),
+                        "SPT reader leaves original bytes unchanged " + original, ref assertions);
+                }
+            }
+            finally
+            {
+                System.IO.File.Delete(System.IO.Path.Combine(folder, "Script.spt"));
+                System.IO.Directory.Delete(folder);
+            }
         }
         finally { UnityEngine.Object.DestroyImmediate(host); }
     }
@@ -3964,6 +4040,18 @@ public static class TestPlayRuntimeVerification
         }
     }
 
+    public static string StartBoostShotVerification()
+    {
+        return WindomVerificationRunner.StartTestJob((job, token) => {
+            token.ThrowIfCancellationRequested();
+            job.currentSuite = "BoostShot";
+            int assertions = 0;
+            VerifyBoostShotContinuation(ref assertions);
+            job.suites.Add(new WindomVerificationSuiteResult { name = "BoostShot", assertions = assertions });
+            return System.Threading.Tasks.Task.CompletedTask;
+        });
+    }
+
     static void VerifyBoostShotContinuation(ref int assertions)
     {
         var go = new GameObject("BoostShotVerification");
@@ -3989,6 +4077,7 @@ public static class TestPlayRuntimeVerification
                 SetField(c, "moveCommand", Vector3.forward * .25f);
                 SetField(c, "gvEnable", false); SetField(c, "forceCommand", Vector3.zero);
                 SetField(c, "velocity", Vector3.zero); SetField(c, "riseKeyHeld", false);
+                ((Dictionary<int, float>)GetField(c, "burnerRequestedOutputs"))[0] = 1f;
                 root.transform.SetPositionAndRotation(Vector3.up * 10, Quaternion.identity);
             };
             foreach (int id in new[] { 106, 107, 108 })
@@ -3996,6 +4085,9 @@ public static class TestPlayRuntimeVerification
                 prepare(); shoot(id);
                 Require((bool)GetField(c, "boostMotionActive"), "boost shot retains locomotion " + id, ref assertions);
                 call("TickAnimation"); call("UpdateOriginalMovementEnergy");
+                object[] burnerArgs = { 0, 0f };
+                Require((bool)typeof(TestPlayController).GetMethod("TryGetActiveBurnerOutput", InstancePrivate).Invoke(c, burnerArgs) &&
+                    (float)burnerArgs[1] == 1f, "shot block reset preserves lower-channel burner " + id, ref assertions);
                 float energy = c.currentEnergy;
                 Vector3 position = root.transform.position; call("ApplyRootMotion");
                 Require(root.transform.position.z > position.z && Mathf.Abs(root.transform.position.y - position.y) < .0001f,
@@ -4006,6 +4098,8 @@ public static class TestPlayRuntimeVerification
                     "shot resumes boost without entry cost " + id, ref assertions);
                 Require((int)GetField(c, "actionTick") == 41 && (int)GetField(c, "scriptTick") == 12,
                     "resume keeps elapsed boost time and ANI cursor " + id, ref assertions);
+                Require(((Dictionary<int, float>)GetField(c, "burnerRequestedOutputs")).ContainsKey(0),
+                    "resume restores burner without replaying ANI block " + id, ref assertions);
                 position = root.transform.position; call("TickAnimation"); call("ApplyRootMotion");
                 Require(root.transform.position.z > position.z, "resume has no startup stop " + id, ref assertions);
             }

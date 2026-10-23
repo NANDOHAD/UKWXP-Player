@@ -30,6 +30,9 @@ public class TestPlayOriginalEffect : MonoBehaviour
         if (meshRenderer == null || shader == null || texture == null)
             return;
 
+        // G1 Unity rendering: smoke, beams and sprite sheets are not solid occluders.
+        meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        meshRenderer.receiveShadows = false;
         runtimeMaterial = new Material(shader)
         {
             name = "TestPlayOriginalEffect_" + texture.name,

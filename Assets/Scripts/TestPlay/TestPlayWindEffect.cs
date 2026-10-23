@@ -136,15 +136,7 @@ public class TestPlayWindEffect : MonoBehaviour
     void ReplaceMaterial(Shader preferredShader, Texture texture)
     {
         DestroyMaterial();
-        Shader shader = preferredShader;
-        if (shader == null)
-            shader = Shader.Find("Universal Render Pipeline/Unlit");
-        if (shader == null)
-            shader = Shader.Find("Sprites/Default");
-        if (shader == null)
-            shader = Shader.Find("Unlit/Color");
-        if (shader == null)
-            shader = Shader.Find("Standard");
+        Shader shader = preferredShader != null ? preferredShader : Shader.Find("WindomXP/TestPlayOriginalEffect");
         if (shader == null)
         {
             meshRenderer.enabled = false;

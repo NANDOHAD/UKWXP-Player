@@ -29,6 +29,7 @@ public class RoboStructure : MonoBehaviour
     // Start is called before the first frame update
     internal Action<UnityEngine.Object> RegisterOwnedAsset;
     readonly HashSet<GameObject> meshlessModelParts = new HashSet<GameObject>();
+    readonly Dictionary<string, Texture2D> ownedTextureCache = new Dictionary<string, Texture2D>();
 
     // A successfully parsed, meshless X is a transform-only part, not an import failure.
     internal bool IsMeshlessModelPart(GameObject part) => meshlessModelParts.Contains(part);
@@ -60,7 +61,9 @@ public class RoboStructure : MonoBehaviour
         InitializeRuntime();
         foreach (string file in Directory.GetFiles(folder))
         {
-            if (transcoder.findCypher(file))
+            // Mixed MOD folders can contain plain X files alongside encrypted X/PNG/SPT.
+            // A plain signature yields key 0; keep looking for the folder's encrypted key.
+            if (transcoder.findCypher(file) && transcoder.cypher != 0)
                 break;
         }
 
@@ -176,7 +179,7 @@ public class RoboStructure : MonoBehaviour
                 for (int index = 0; index < materials.Length; index++)
                 {
                     int meshIndex = combinedMeshIndices[index];
-                    var mat = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+                    var mat = WindomRenderMaterials.CreateLit();
                     RegisterOwnedAsset?.Invoke(mat);
 
                     if (scen.Meshes[meshIndex].MaterialIndex < scen.Materials.Length)
@@ -187,7 +190,8 @@ public class RoboStructure : MonoBehaviour
                             var textures = scen.Materials[scen.Meshes[meshIndex].MaterialIndex].GetAllTextures();
                             var color = scen.Materials[scen.Meshes[meshIndex].MaterialIndex].ColorDiffuse;
                             mat.color = new Color(color.R, color.G, color.B, color.A);
-                            mat.SetFloat("_Glossiness", scen.Materials[scen.Meshes[meshIndex].MaterialIndex].ShininessStrength);
+                            mat.SetFloat("_Smoothness", scen.Materials[scen.Meshes[meshIndex].MaterialIndex].ShininessStrength);
+                            ApplyAssimpEmissive(mat, scen.Materials[scen.Meshes[meshIndex].MaterialIndex]);
 
 
                             if (textures.Length > 0 && File.Exists(Path.Combine(Modelpath, textures[0].FilePath)))
@@ -208,6 +212,7 @@ public class RoboStructure : MonoBehaviour
                         //Debug.logWarning($"Invalid material index for mesh {index}: {scen.Meshes[index].MaterialIndex}");
                     }
 
+                    WindomRenderMaterials.ApplySurface(mat, file, index);
                     materials[index] = mat;
                 }
 
@@ -241,7 +246,13 @@ public class RoboStructure : MonoBehaviour
         try
         {
             string Modelpath = Path.GetDirectoryName(file);
-            byte[] data = transcoder.Transcode(file);
+            byte[] data = File.ReadAllBytes(file);
+            // Unity import compatibility: preserve a plain X header instead of XORing it
+            // with the folder key. Do not change that key: textures and SPT still use it.
+            bool plainX = data.Length >= 4 && data[0] == (byte)'x' && data[1] == (byte)'o'
+                && data[2] == (byte)'f' && data[3] == (byte)' ';
+            if (!plainX)
+                data = transcoder.Transcode(data);
             if (data == null)
             {
                 //Debug.logError($"Failed to transcode file: {file}. The result is null.");
@@ -304,7 +315,7 @@ public class RoboStructure : MonoBehaviour
                     for (int index = 0; index < materials.Length; index++)
                     {
                         int meshIndex = combinedMeshIndices[index];
-                        var mat = new Material(Shader.Find("Standard"));
+                        var mat = WindomRenderMaterials.CreateLit();
                         RegisterOwnedAsset?.Invoke(mat);
                         if (mat == null)
                         {
@@ -320,20 +331,15 @@ public class RoboStructure : MonoBehaviour
                                 var textures = scen.Materials[scen.Meshes[meshIndex].MaterialIndex].GetAllTextures();
                                 var color = scen.Materials[scen.Meshes[meshIndex].MaterialIndex].ColorDiffuse;
                                 mat.color = new Color(color.R, color.G, color.B, color.A);
-                                mat.SetFloat("_Glossiness", scen.Materials[scen.Meshes[meshIndex].MaterialIndex].ShininessStrength);
-
-                                // シェーダーが設定されていない場合、デフォルトのシェーダーを割り当てる
-                                if (string.IsNullOrEmpty(mat.shader.name) || mat.shader == null)
-                                {
-                                    //Debug.logWarning($"Shader not set for material: {mat.name}. Assigning default shader.");
-                                    mat.shader = Shader.Find("Standard"); // デフォルトのシェーダーを設定
-                                }
+                                mat.SetFloat("_Smoothness", scen.Materials[scen.Meshes[meshIndex].MaterialIndex].ShininessStrength);
+                                ApplyAssimpEmissive(mat, scen.Materials[scen.Meshes[meshIndex].MaterialIndex]);
 
                                 if (textures.Length > 0 && File.Exists(Path.Combine(Modelpath, textures[0].FilePath)))
                                 {
                                     try
                                     {
-                                        mat.mainTexture = Helper.LoadTextureEncrypted(Path.Combine(Modelpath, textures[0].FilePath), ref transcoder);
+                                        mat.mainTexture = Helper.LoadTextureEncrypted(Path.Combine(Modelpath, textures[0].FilePath), ref transcoder,
+                                            RegisterOwnedAsset != null ? ownedTextureCache : null);
                                         RegisterOwnedAsset?.Invoke(mat.mainTexture);
                                     }
                                     catch (System.Exception e)
@@ -352,6 +358,7 @@ public class RoboStructure : MonoBehaviour
                             //Debug.logWarning($"Invalid material index for mesh {index}: {scen.Meshes[index].MaterialIndex}");
                         }
 
+                        WindomRenderMaterials.ApplySurface(mat, file, index);
                         materials[index] = mat;
                     }
 
@@ -377,6 +384,18 @@ public class RoboStructure : MonoBehaviour
         }
     }
 
+
+    // AssimpのXファイルMaterialテンプレート emissiveColor → Unity放出色の写像。
+    // 原作確定ではなくAssimp経由の取得（Unity代替）。黒(未設定)のときは
+    // _EMISSION keywordを付けず、既存の見た目・シェーダーバリアント構成を維持する。
+    static void ApplyAssimpEmissive(Material mat, Assimp.Material src)
+    {
+        var e = src.ColorEmissive;
+        if (e.R <= 0f && e.G <= 0f && e.B <= 0f)
+            return;
+        mat.EnableKeyword("_EMISSION");
+        mat.SetColor("_EmissionColor", new Color(e.R, e.G, e.B, 1f));
+    }
 
     static List<CombineInstance> BuildCombineInstances(Assimp.Scene scen, string file, bool mirrorZ, out List<int> combinedMeshIndices, Action<UnityEngine.Object> registerAsset = null)
     {

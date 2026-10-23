@@ -34,7 +34,19 @@ public static class MechLoader
         if (robo == null || string.IsNullOrEmpty(robo.folder) || robo.transcoder == null)
             return null;
         string path = Path.Combine(robo.folder, "Script.spt");
-        return File.Exists(path) ? USEncoder.ToEncoding.ToUnicode(robo.transcoder.Transcode(path)) : null;
+        if (!File.Exists(path)) return null;
+        byte[] source = File.ReadAllBytes(path);
+        byte[] decoded = robo.transcoder.Transcode((byte[])source.Clone());
+        // Original FUN_00573340 XORs while offset < length-4. At a multiple
+        // of four this leaves the last full word plain (real Helesta SPT).
+        // Existing editor saves encrypt every full word: preserve that format
+        // too. Select the original variant only with its literal closing token;
+        // never repair/invent a command or change the shared binary transcoder.
+        int end = source.Length;
+        if (end >= 4 && end % 4 == 0 && source[end-4] == (byte)')' &&
+            source[end-3] == (byte)';' && source[end-2] == 13 && source[end-1] == 10)
+            Array.Copy(source, end-4, decoded, end-4, 4);
+        return USEncoder.ToEncoding.ToUnicode(decoded);
     }
 
     public static SptRuntimeData BindSpt(string text, Transform root, ParticleSystem prefab = null)

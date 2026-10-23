@@ -3,7 +3,9 @@ Shader "WindomXP/TestPlayOriginalEffect"
     Properties
     {
         _MainTex ("Texture", 2D) = "white" {}
+        [HideInInspector] _TrailUV ("Trail UV", Float) = 0
         _TintColor ("Tint", Color) = (1,1,1,1)
+        [Enum(UnityEngine.Rendering.BlendMode)] _DstBlend ("Destination blend", Float) = 1
     }
 
     // The current 6000.6 project resolves the built-in renderer and does not
@@ -21,7 +23,8 @@ Shader "WindomXP/TestPlayOriginalEffect"
         Pass
         {
             Name "OriginalEffectBuiltIn"
-            Blend SrcAlpha One
+            Blend SrcAlpha [_DstBlend]
+            ZTest LEqual
             ZWrite Off
             Cull Off
 
@@ -45,12 +48,15 @@ Shader "WindomXP/TestPlayOriginalEffect"
             sampler2D _MainTex;
             float4 _MainTex_ST;
             fixed4 _TintColor;
+            float _TrailUV;
 
             Varyings Vert(Attributes input)
             {
                 Varyings output;
                 output.positionCS = UnityObjectToClipPos(input.positionOS);
-                output.uv = TRANSFORM_TEX(input.uv, _MainTex);
+                // Original CLaser: U across width, V from newest to oldest node.
+                float2 uv = lerp(input.uv, float2(input.uv.y, 1-input.uv.x), _TrailUV);
+                output.uv = TRANSFORM_TEX(uv, _MainTex);
                 return output;
             }
 

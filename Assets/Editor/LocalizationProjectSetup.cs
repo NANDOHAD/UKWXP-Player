@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using TMPro;
 using UnityEditor;
 using UnityEditor.Localization;
 using UnityEditor.SceneManagement;
@@ -12,10 +15,18 @@ using UnityEngine.UI;
 
 public static class LocalizationProjectSetup
 {
-    const string ScenePath = "Assets/UI_MechaClean.unity";
+    static readonly string[] ScenePathCandidates =
+    {
+        "Assets/Scenes/MechSelection.unity",
+        "Assets/MechSelection.unity",
+    };
+
     const string LocalizationRoot = "Assets/Localization";
     const string LocaleRoot = LocalizationRoot + "/Locales";
     const string TableRoot = LocalizationRoot + "/Tables";
+    const string SourceRoot = LocalizationRoot + "/Source";
+    const string FixedDictionaryPath = SourceRoot + "/FixedTranslations.tsv";
+    const string UnmatchedTextsPath = SourceRoot + "/UnmatchedSceneTexts.tsv";
 
     sealed class Translation
     {
@@ -39,144 +50,13 @@ public static class LocalizationProjectSetup
 
     static Translation Fixed(string japanese, string english)
     {
-        string hash = Hash128.Compute(japanese).ToString().Substring(0, 16);
-        return new Translation("fixed." + hash, japanese, english);
+        return new Translation(UILocalization.FixedKey(japanese), japanese, english);
     }
 
     static Translation Dynamic(string key, string japanese, string english)
     {
         return new Translation(key, japanese, english);
     }
-
-    static readonly Translation[] FixedTranslations =
-    {
-        Fixed("3Dハンドルツール", "3D Handle Tool"),
-        Fixed("閉じる", "Close"),
-        Fixed("制約データ", "Constraint Data"),
-        Fixed("実行できない操作です。", "This operation is not available."),
-        Fixed("HODの名前を変更する", "Rename HOD"),
-        Fixed("HODを書き出す", "Export HOD"),
-        Fixed("HODを読み込む", "Load HOD"),
-        Fixed("HODを貼り付ける", "Paste HOD"),
-        Fixed("HODファイルを書き出す", "Export HOD File"),
-        Fixed("HODファイル選択", "Select HOD File"),
-        Fixed("HOD編集", "HOD Editor"),
-        Fixed("下限", "Lower"),
-        Fixed("中立", "Neutral"),
-        Fixed("OK", "OK"),
-        Fixed("オブジェクトを上書き", "Object Override"),
-        Fixed("プロシージャルヘルパー", "Procedural Helper"),
-        Fixed("ROBOフォルダーのディレクトリパス", "ROBO Folder Path"),
-        Fixed("パーツを削除", "Remove Part"),
-        Fixed("パーツ名を変更／交換", "Rename/Swap Part"),
-        Fixed("Robo.hodをロードする", "Load Robo.hod"),
-        Fixed("Script.aniをロードする", "Load Script.ani"),
-        Fixed("Script.aniを上書き保存する", "Overwrite Script.ani"),
-        Fixed("Script.sptの編集", "Edit Script.spt"),
-        Fixed("Script.sptファイルの編集", "Edit Script.spt File"),
-        Fixed("Scriptのフレーム", "Script Frame"),
-        Fixed("Scriptの先頭部分", "Script Header"),
-        Fixed("Script編集", "Script Editor"),
-        Fixed("待機中...", "Standby..."),
-        Fixed("上限", "Upper"),
-        Fixed("hangar.hodをロードする", "Load hangar.hod"),
-        Fixed("その他", "Other"),
-        Fixed("アニメリストをダンプ", "Dump Animation List"),
-        Fixed("アニメリストを同期する", "Synchronize Animation List"),
-        Fixed("アニメ名の変更", "Rename Animation"),
-        Fixed("アプリケーション:", "Application:"),
-        Fixed("環境設定", "Configuration"),
-        Fixed("カメラリセット", "Reset Camera"),
-        Fixed("カメラ移動速度", "Camera Move Speed"),
-        Fixed("カメラ設定", "Camera Settings"),
-        Fixed("キャンセル", "Cancel"),
-        Fixed("サブ1（104番）", "Sub 1 (No. 104)"),
-        Fixed("サブ2（105番）", "Sub 2 (No. 105)"),
-        Fixed("ステップ時の機体角度（0～360）", "Mecha Angle During Step (0-360)"),
-        Fixed("ツールの種類", "Tool Type"),
-        Fixed("テキストを入力してください", "Enter text"),
-        Fixed("ディレクトリパスを入力してください...", "Enter a directory path..."),
-        Fixed("パーツツリー", "Part Tree"),
-        Fixed("パーツ編集", "Part Editor"),
-        Fixed("パーツ選択", "Select Part"),
-        Fixed("ファイル", "File"),
-        Fixed("フリップする", "Flip"),
-        Fixed("フリーカメラを使用する", "Use Free Camera"),
-        Fixed("フレームの長さ", "Frame Length"),
-        Fixed("フレーム毎のトランジション", "Per-Frame Transition"),
-        Fixed("プロシージャルヘルパー（未実装）", "Procedural Helper (Not Implemented)"),
-        Fixed("プロシージャル編集", "Procedural Editor"),
-        Fixed("ポーズのプロシージャル編集を補助します。\n手先や足先以外に使用すると不自然な結果になる場合があります。\nこの機能は未完成です。", "Assists with procedural pose editing.\nUsing it on parts other than hands or feet may produce unnatural results.\nThis feature is incomplete."),
-        Fixed("リロードする", "Reload"),
-        Fixed("ループ再生", "Loop Playback"),
-        Fixed("ローカル", "Local"),
-        Fixed("一時停止", "Pause"),
-        Fixed("位置", "Position"),
-        Fixed("保存していない項目はリセットされます。\n新しくROBOを開きますか？", "Unsaved changes will be reset.\nOpen another ROBO?"),
-        Fixed("全アニメに適用", "Apply to All Animations"),
-        Fixed("全値をコピー", "Copy All Values"),
-        Fixed("全値を貼り付け", "Paste All Values"),
-        Fixed("再生", "Play"),
-        Fixed("制約の詳細を表示する", "Show Constraint Details"),
-        Fixed("前後左右ステップのアニメ", "Directional Step Animations"),
-        Fixed("各特殊技アニメ", "Special Move Animations"),
-        Fixed("回転", "Rotation"),
-        Fixed("回転を制約に同期する", "Synchronize Rotation to Constraint"),
-        Fixed("変更を保存する", "Save Changes"),
-        Fixed("大きさ", "Scale"),
-        Fixed("座標系の種類", "Coordinate Space"),
-        Fixed("必殺技（109番）", "Finisher (No. 109)"),
-        Fixed("指定アニメに適用", "Apply to Selected Animation"),
-        Fixed("新しいHODを追加", "Add New HOD"),
-        Fixed("新しくROBOを開く", "Open Another ROBO"),
-        Fixed("特殊アニメ", "Special Animations"),
-        Fixed("画面モード選択", "View Mode"),
-        Fixed("終了する", "Exit"),
-        Fixed("編集", "Edit"),
-        Fixed("編集を終了する", "Finish Editing"),
-        Fixed("編集モード", "Edit Mode"),
-        Fixed("プレビューモード", "Viewing Mode"),
-        Fixed("テストモード", "Test Mode"),
-        Fixed("表示／非表示", "Show/Hide"),
-        Fixed("補助のオン／オフ", "Enable/Disable Helper"),
-        Fixed("視点の回転速度", "View Rotation Speed"),
-        Fixed("視点を初期位置に戻す", "Reset View"),
-        Fixed("設定を完了する", "Apply Settings"),
-        Fixed("環境設定", "Configuration"),
-        Fixed("読み込む機体を選択する", "Select a Mecha to Load"),
-        Fixed("選択HODをコピー", "Copy Selected HOD"),
-        Fixed("選択HODを上に移動", "Move Selected HOD Up"),
-        Fixed("選択HODを下に移動", "Move Selected HOD Down"),
-        Fixed("選択HODを削除", "Delete Selected HOD"),
-        Fixed("選択Scriptを上に移動", "Move Selected Script Up"),
-        Fixed("選択Scriptを下に移動", "Move Selected Script Down"),
-        Fixed("選択Scriptを削除", "Delete Selected Script"),
-        Fixed("選択アニメ再生", "Play Selected Animation"),
-        Fixed("選択ツリーに新しいパーツを追加します。", "Add a new part to the selected tree location."),
-        Fixed("選択パーツの名前を変更", "Rename Selected Part"),
-        Fixed("選択パーツの情報をコピー", "Copy Selected Part Data"),
-        Fixed("選択パーツの情報をペースト", "Paste Selected Part Data"),
-        Fixed("選択パーツを\n削除", "Delete\nSelected Part"),
-        Fixed("選択パーツをターゲットにする", "Target Selected Part"),
-        Fixed("選択パーツを削除", "Delete Selected Part"),
-        Fixed("選択パーツ値を全てのHODに適用する", "Apply Selected Part Values to All HODs"),
-        Fixed("選択位置に\nパーツ追加", "Add Part at\nSelected Position"),
-        Fixed("選択位置にScript追加", "Add Script at Selected Position"),
-        Fixed("選択位置にパーツを追加", "Add Part at Selected Position"),
-        Fixed("ワールド", "World"),
-        Fixed("機体名不明", "Unknown Mecha"),
-        Fixed("修復して読み込む", "Repair and Load"),
-        Fixed("treeDepthを正として修復", "Repair Using treeDepth"),
-        Fixed("childCountを正として修復", "Repair Using childCount"),
-        Fixed("不整合パーツを除外して読み込む", "Exclude Inconsistent Parts and Load"),
-        Fixed("階層を手動修復", "Repair Hierarchy Manually"),
-        Fixed("検証して適用", "Validate and Apply"),
-        Fixed("未接続に戻す", "Leave Unconnected"),
-        Fixed("読取専用で続行", "Continue Read-Only"),
-        Fixed("設定へ戻る", "Return to Settings"),
-        Fixed("<範囲外>", "<Out of range>"),
-        Fixed("言語", "Language")
-    };
 
     static readonly Translation[] DynamicTranslations =
     {
@@ -339,10 +219,13 @@ public static class LocalizationProjectSetup
         Dynamic("ani.legacy_conversion.completed", "旧ANIをAN2へ変換し、変換後ファイルを読み込みました。\n保存先: {0}\n元の旧ANIは変更されていません。\n原作で使用する枠数: {1}（最大200）\n追加保持枠数: {2}（原作では使用しません）", "The legacy ANI was converted to AN2 and the converted file was loaded.\nSaved to: {0}\nThe original legacy ANI was not changed.\nSlots used by the original game: {1} (maximum 200)\nExtra slots retained for this editor: {2} (not used by the original game)")
     };
 
+
     [MenuItem("Tools/WindomXP/Localization/日英Localizationを構築")]
-public static void BuildJapaneseEnglishLocalization()
+    public static void BuildJapaneseEnglishLocalization()
     {
         EnsureFolders();
+        Translation[] fixedTranslations = LoadFixedTranslations();
+
         LocalizationSettings settings = EnsureLocalizationSettings();
         Locale japanese = EnsureLocale("ja", SystemLanguage.Japanese, "Japanese (ja)");
         Locale english = EnsureLocale("en", SystemLanguage.English, "English (en)");
@@ -360,20 +243,128 @@ public static void BuildJapaneseEnglishLocalization()
 
         StringTable japaneseTable = collection.GetTable(japanese.Identifier) as StringTable;
         StringTable englishTable = collection.GetTable(english.Identifier) as StringTable;
-        AddOrUpdateEntries(japaneseTable, englishTable, FixedTranslations);
+        AddOrUpdateEntries(japaneseTable, englishTable, fixedTranslations);
         AddOrUpdateEntries(japaneseTable, englishTable, DynamicTranslations);
         LocalizationEditorSettings.SetPreloadTableFlag(japaneseTable, true);
         LocalizationEditorSettings.SetPreloadTableFlag(englishTable, true);
 
-        Scene scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
-        int localizedCount = AttachFixedTextLocalizers(scene);
-        CreateLanguageSelector(scene);
+        Scene scene = OpenTargetScene();
+        int localizedCount = AttachFixedTextLocalizers(scene, fixedTranslations);
+        CreateLanguageSelector(scene, fixedTranslations);
+        int unmatchedCount = WriteUnmatchedSceneTexts(scene, fixedTranslations);
         EditorSceneManager.MarkSceneDirty(scene);
         EditorSceneManager.SaveScene(scene);
 
         AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
-        Debug.Log($"[LocalizationProjectSetup] 日英Localizationを構築しました。固定UI: {localizedCount}件");
+        Debug.Log(
+            $"[LocalizationProjectSetup] 日英Localizationを構築しました。固定UI: {localizedCount}件 / 未登録: {unmatchedCount}件 → {UnmatchedTextsPath}");
+    }
+
+    [MenuItem("Tools/WindomXP/Localization/未登録Fixed文言を書き出す")]
+    public static void ExportUnmatchedFixedTexts()
+    {
+        EnsureFolders();
+        Translation[] fixedTranslations = LoadFixedTranslations();
+        Scene scene = OpenTargetScene();
+        int unmatchedCount = WriteUnmatchedSceneTexts(scene, fixedTranslations);
+        AssetDatabase.Refresh();
+        Debug.Log(
+            $"[LocalizationProjectSetup] 未登録Fixed文言を書き出しました: {unmatchedCount}件 → {UnmatchedTextsPath}");
+        EditorUtility.RevealInFinder(UnmatchedTextsPath);
+    }
+
+    static Translation[] LoadFixedTranslations()
+    {
+        string absolutePath = ToAbsoluteAssetPath(FixedDictionaryPath);
+        if (!File.Exists(absolutePath))
+        {
+            throw new FileNotFoundException(
+                "Fixed辞書が見つかりません。\n" +
+                FixedDictionaryPath + " を作成し、Japanese<TAB>English 形式で追記してください。");
+        }
+
+        var translations = new List<Translation>();
+        var seenKeys = new HashSet<string>();
+        string[] lines = File.ReadAllLines(absolutePath, Encoding.UTF8);
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string line = lines[i];
+            if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith("#", StringComparison.Ordinal))
+                continue;
+
+            int tab = line.IndexOf('\t');
+            if (tab < 0)
+            {
+                Debug.LogWarning($"[LocalizationProjectSetup] Fixed辞書 {i + 1}行目にTABがありません: {line}");
+                continue;
+            }
+
+            string japanese = UnescapeField(line.Substring(0, tab));
+            string english = UnescapeField(line.Substring(tab + 1));
+            if (string.IsNullOrWhiteSpace(japanese))
+            {
+                Debug.LogWarning($"[LocalizationProjectSetup] Fixed辞書 {i + 1}行目の日本語が空です。");
+                continue;
+            }
+
+            Translation translation = Fixed(japanese, english ?? string.Empty);
+            if (!seenKeys.Add(translation.Key))
+            {
+                Debug.LogWarning($"[LocalizationProjectSetup] Fixed辞書でキー重複のため上書きします: {japanese}");
+                translations.RemoveAll(entry => entry.Key == translation.Key);
+            }
+
+            translations.Add(translation);
+        }
+
+        if (translations.Count == 0)
+            throw new InvalidOperationException("Fixed辞書に有効な行がありません: " + FixedDictionaryPath);
+
+        return translations.ToArray();
+    }
+
+    static int WriteUnmatchedSceneTexts(Scene scene, Translation[] fixedTranslations)
+    {
+        var unmatched = new SortedDictionary<string, (string Path, string Text)>(StringComparer.Ordinal);
+        int scannedCount = 0;
+        foreach (SceneTextEntry entry in EnumerateSceneTexts(scene))
+        {
+            scannedCount++;
+            if (IsIgnorableText(entry.Text))
+                continue;
+
+            if (FindFixedTranslation(fixedTranslations, entry.Text) != null)
+                continue;
+
+            string key = Normalize(entry.Text);
+            if (unmatched.ContainsKey(key))
+                continue;
+
+            unmatched[key] = (entry.HierarchyPath, entry.Text);
+        }
+
+        var lines = new List<string>
+        {
+            "# Unmatched Text / TMP_Text values in the target scene (not found in FixedTranslations.tsv)",
+            "# Format: HierarchyPath<TAB>Japanese<TAB>English",
+            "# Fill English, then copy Japanese/English columns into FixedTranslations.tsv",
+            "# Scanned components: " + scannedCount,
+            "# Generated: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+            "",
+        };
+
+        foreach (KeyValuePair<string, (string Path, string Text)> pair in unmatched)
+        {
+            lines.Add(EscapeField(pair.Value.Path) + "\t" + EscapeField(pair.Value.Text) + "\t");
+        }
+
+        string absolutePath = ToAbsoluteAssetPath(UnmatchedTextsPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(absolutePath));
+        File.WriteAllText(absolutePath, string.Join("\n", lines) + "\n", new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+        Debug.Log(
+            $"[LocalizationProjectSetup] シーン文言走査: 対象コンポーネント {scannedCount}件 / 未登録 {unmatched.Count}件");
+        return unmatched.Count;
     }
 
     static void AddOrUpdateEntries(StringTable japaneseTable, StringTable englishTable, IEnumerable<Translation> translations)
@@ -391,35 +382,120 @@ public static void BuildJapaneseEnglishLocalization()
         EditorUtility.SetDirty(japaneseTable.SharedData);
     }
 
-    static int AttachFixedTextLocalizers(Scene scene)
+    static int AttachFixedTextLocalizers(Scene scene, Translation[] fixedTranslations)
     {
         int count = 0;
-        foreach (Text textComponent in Resources.FindObjectsOfTypeAll<Text>())
+        foreach (SceneTextEntry entry in EnumerateSceneTexts(scene))
         {
-            if (textComponent == null || textComponent.gameObject.scene != scene)
+            if (IsIgnorableText(entry.Text))
                 continue;
 
-            Translation translation = FindFixedTranslation(textComponent.text);
+            Translation translation = FindFixedTranslation(fixedTranslations, entry.Text);
             if (translation == null)
                 continue;
 
-            UILocalizedText localizer = textComponent.GetComponent<UILocalizedText>();
-            if (localizer == null)
-                localizer = Undo.AddComponent<UILocalizedText>(textComponent.gameObject);
+            if (entry.LegacyText != null)
+            {
+                UILocalizedText localizer = entry.LegacyText.GetComponent<UILocalizedText>();
+                if (localizer == null)
+                    localizer = Undo.AddComponent<UILocalizedText>(entry.LegacyText.gameObject);
 
-            SerializedObject serializedLocalizer = new SerializedObject(localizer);
-            serializedLocalizer.FindProperty("entryKey").stringValue = translation.Key;
-            serializedLocalizer.ApplyModifiedPropertiesWithoutUndo();
-            EditorUtility.SetDirty(localizer);
-            count++;
+                SerializedObject serializedLocalizer = new SerializedObject(localizer);
+                serializedLocalizer.FindProperty("entryKey").stringValue = translation.Key;
+                serializedLocalizer.ApplyModifiedPropertiesWithoutUndo();
+                EditorUtility.SetDirty(localizer);
+                count++;
+                continue;
+            }
+
+            if (entry.TmpText != null)
+            {
+                UILocalizedTmpText localizer = entry.TmpText.GetComponent<UILocalizedTmpText>();
+                if (localizer == null)
+                    localizer = Undo.AddComponent<UILocalizedTmpText>(entry.TmpText.gameObject);
+
+                SerializedObject serializedLocalizer = new SerializedObject(localizer);
+                serializedLocalizer.FindProperty("entryKey").stringValue = translation.Key;
+                serializedLocalizer.ApplyModifiedPropertiesWithoutUndo();
+                EditorUtility.SetDirty(localizer);
+                count++;
+            }
         }
 
         return count;
     }
 
-    static Translation FindFixedTranslation(string value)
+    readonly struct SceneTextEntry
     {
-        foreach (Translation translation in FixedTranslations)
+        public readonly string Text;
+        public readonly string HierarchyPath;
+        public readonly Text LegacyText;
+        public readonly TMP_Text TmpText;
+
+        public SceneTextEntry(string text, string hierarchyPath, Text legacyText, TMP_Text tmpText)
+        {
+            Text = text;
+            HierarchyPath = hierarchyPath;
+            LegacyText = legacyText;
+            TmpText = tmpText;
+        }
+    }
+
+    static IEnumerable<SceneTextEntry> EnumerateSceneTexts(Scene scene)
+    {
+        foreach (Text textComponent in Resources.FindObjectsOfTypeAll<Text>())
+        {
+            if (!IsSceneObject(textComponent, scene))
+                continue;
+
+            yield return new SceneTextEntry(
+                textComponent.text ?? string.Empty,
+                GetHierarchyPath(textComponent.transform),
+                textComponent,
+                null);
+        }
+
+        foreach (TMP_Text tmpText in Resources.FindObjectsOfTypeAll<TMP_Text>())
+        {
+            if (!IsSceneObject(tmpText, scene))
+                continue;
+
+            yield return new SceneTextEntry(
+                tmpText.text ?? string.Empty,
+                GetHierarchyPath(tmpText.transform),
+                null,
+                tmpText);
+        }
+    }
+
+    static bool IsSceneObject(Component component, Scene scene)
+    {
+        if (component == null)
+            return false;
+
+        GameObject gameObject = component.gameObject;
+        if (gameObject == null || gameObject.scene != scene)
+            return false;
+
+        // Prefab assets and other non-scene objects can appear in FindObjectsOfTypeAll.
+        if (EditorUtility.IsPersistent(gameObject))
+            return false;
+
+        return true;
+    }
+
+    static bool IsIgnorableText(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return true;
+
+        string trimmed = value.Replace("\u200B", string.Empty).Trim();
+        return trimmed.Length == 0;
+    }
+
+    static Translation FindFixedTranslation(Translation[] fixedTranslations, string value)
+    {
+        foreach (Translation translation in fixedTranslations)
         {
             if (translation.Matches(value))
                 return translation;
@@ -428,14 +504,18 @@ public static void BuildJapaneseEnglishLocalization()
         return null;
     }
 
-static void CreateLanguageSelector(Scene scene)
+    static void CreateLanguageSelector(Scene scene, Translation[] fixedTranslations)
     {
         Transform overlay = FindInScene(scene, "UI_Overlay");
         Transform prefPanel = overlay == null ? null : overlay.Find("PrefPanel");
         if (prefPanel == null && overlay != null)
             prefPanel = overlay.Find("環境設定ウインドウ");
         if (prefPanel == null)
-            throw new InvalidOperationException("環境設定ウインドウが見つかりません。");
+        {
+            Debug.LogWarning(
+                "[LocalizationProjectSetup] 環境設定ウインドウが見つからないため、言語セレクタの作成をスキップしました。");
+            return;
+        }
 
         Transform existingDropdown = prefPanel.Find("LanguageDropdown");
         GameObject dropdownObject;
@@ -507,7 +587,10 @@ static void CreateLanguageSelector(Scene scene)
 
         Text label = labelObject.GetComponent<Text>();
         label.text = "言語";
-        Translation translation = FindFixedTranslation("言語");
+        Translation translation = FindFixedTranslation(fixedTranslations, "言語");
+        if (translation == null)
+            throw new InvalidOperationException("Fixed辞書に「言語」がありません: " + FixedDictionaryPath);
+
         UILocalizedText localizer = labelObject.GetComponent<UILocalizedText>();
         if (localizer == null)
             localizer = Undo.AddComponent<UILocalizedText>(labelObject);
@@ -516,6 +599,24 @@ static void CreateLanguageSelector(Scene scene)
         serializedLocalizer.FindProperty("entryKey").stringValue = translation.Key;
         serializedLocalizer.ApplyModifiedPropertiesWithoutUndo();
         EditorUtility.SetDirty(localizer);
+    }
+
+    static Scene OpenTargetScene()
+    {
+        string scenePath = ResolveScenePath();
+        return EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Single);
+    }
+
+    static string ResolveScenePath()
+    {
+        foreach (string candidate in ScenePathCandidates)
+        {
+            if (File.Exists(ToAbsoluteAssetPath(candidate)))
+                return candidate;
+        }
+
+        throw new FileNotFoundException(
+            "編集シーンが見つかりません。候補: " + string.Join(", ", ScenePathCandidates));
     }
 
     static Transform FindInScene(Scene scene, string name)
@@ -527,6 +628,20 @@ static void CreateLanguageSelector(Scene scene)
         }
 
         return null;
+    }
+
+    static string GetHierarchyPath(Transform transform)
+    {
+        var parts = new List<string>();
+        Transform current = transform;
+        while (current != null)
+        {
+            parts.Add(current.name);
+            current = current.parent;
+        }
+
+        parts.Reverse();
+        return string.Join("/", parts);
     }
 
     static Locale EnsureLocale(string code, SystemLanguage language, string assetName)
@@ -546,6 +661,7 @@ static void CreateLanguageSelector(Scene scene)
         EnsureFolder(LocalizationRoot);
         EnsureFolder(LocaleRoot);
         EnsureFolder(TableRoot);
+        EnsureFolder(SourceRoot);
     }
 
     static void EnsureFolder(string path)
@@ -561,16 +677,7 @@ static void CreateLanguageSelector(Scene scene)
         AssetDatabase.CreateFolder(parent, name);
     }
 
-    static string Normalize(string value)
-    {
-        return (value ?? string.Empty)
-            .Replace("１", "1")
-            .Replace("２", "2")
-            .TrimEnd('\r', '\n');
-    }
-
-
-static LocalizationSettings EnsureLocalizationSettings()
+    static LocalizationSettings EnsureLocalizationSettings()
     {
         const string settingsPath = LocalizationRoot + "/Localization Settings.asset";
         LocalizationSettings settings = LocalizationEditorSettings.ActiveLocalizationSettings;
@@ -588,5 +695,68 @@ static LocalizationSettings EnsureLocalizationSettings()
         }
 
         return settings;
+    }
+
+    static string ToAbsoluteAssetPath(string assetPath)
+    {
+        string projectRoot = Path.GetDirectoryName(Application.dataPath);
+        return Path.GetFullPath(Path.Combine(projectRoot, assetPath.Replace('/', Path.DirectorySeparatorChar)));
+    }
+
+    static string Normalize(string value)
+    {
+        return (value ?? string.Empty)
+            .Replace("１", "1")
+            .Replace("２", "2")
+            .TrimEnd('\r', '\n');
+    }
+
+    static string EscapeField(string value)
+    {
+        return (value ?? string.Empty)
+            .Replace("\\", "\\\\")
+            .Replace("\r\n", "\n")
+            .Replace("\r", "\n")
+            .Replace("\n", "\\n")
+            .Replace("\t", "\\t");
+    }
+
+    static string UnescapeField(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return string.Empty;
+
+        var builder = new StringBuilder(value.Length);
+        for (int i = 0; i < value.Length; i++)
+        {
+            char c = value[i];
+            if (c != '\\' || i + 1 >= value.Length)
+            {
+                builder.Append(c);
+                continue;
+            }
+
+            char next = value[++i];
+            switch (next)
+            {
+                case 'n':
+                    builder.Append('\n');
+                    break;
+                case 'r':
+                    builder.Append('\r');
+                    break;
+                case 't':
+                    builder.Append('\t');
+                    break;
+                case '\\':
+                    builder.Append('\\');
+                    break;
+                default:
+                    builder.Append(next);
+                    break;
+            }
+        }
+
+        return builder.ToString();
     }
 }

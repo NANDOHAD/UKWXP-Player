@@ -187,15 +187,7 @@ public class TestPlayBurnerCone : MonoBehaviour
 
     static Material CreateMaterial(Shader preferredShader, Texture2D texture)
     {
-        Shader shader = preferredShader;
-        if (shader == null)
-            shader = Shader.Find("Universal Render Pipeline/Unlit");
-        if (shader == null)
-            shader = Shader.Find("Sprites/Default");
-        if (shader == null)
-            shader = Shader.Find("Unlit/Color");
-        if (shader == null)
-            shader = Shader.Find("Standard");
+        Shader shader = preferredShader != null ? preferredShader : Shader.Find("WindomXP/TestPlayOriginalEffect");
 
         Material mat = new Material(shader)
         {

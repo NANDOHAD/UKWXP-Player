@@ -139,6 +139,7 @@ public partial class TestPlayController : MonoBehaviour
         state.SetInt(156, SessionReactionState);
         sessionReactionActive = true;
         sessionReactionTicks = 0;
+        if (IsTransformed) ResetTransformationAttitude();
         boostShotContinuation = null;
         boostMotionActive = false;
         attackSequenceActive = false;
@@ -725,6 +726,12 @@ public partial class TestPlayController : MonoBehaviour
     bool previousAirborneFlag;
     bool boostFromRiseActive;
     bool boostMotionActive;
+    bool previousTransformKeyHeld, transformKeyLatched;
+    float transformationPitch;
+    public bool IsTransformed => boostMotionActive &&
+        (IsCurrentAction(TestPlayTransformationCore.Flight) ||
+         boostShotContinuation?.selection.logicalActionId == TestPlayTransformationCore.Flight);
+    bool IsBoostLocomotion => IsCurrentAction(boostAction) || IsTransformed || boostShotContinuation != null;
     // FUN_004d2bd0/FUN_004e50c0 retain the boost callback for 106/107/108;
     // rear shot 103 replaces it. Unity single-action adapter: suspend the
     // locomotion ANI cursor and retain motion without replaying entry/cost.
@@ -1397,6 +1404,15 @@ public partial class TestPlayController : MonoBehaviour
 
         StartPoseTransition(currentAnimationIndex, actionId);
 
+        bool leavingTransformation = IsTransformed && logicalActionId != TestPlayTransformationCore.Flight &&
+            !(boostShotContinuation != null && TestPlayTransformationCore.IsAttack(logicalActionId));
+        if (leavingTransformation) ResetTransformationAttitude();
+        bool preserveBoostBurners = boostShotContinuation != null &&
+            (logicalActionId == boostAction || logicalActionId == boostShotAction ||
+             logicalActionId == TestPlayTransformationCore.Flight || TestPlayTransformationCore.IsAttack(logicalActionId));
+        if (logicalActionId != boostShotAction && !TestPlayTransformationCore.IsAttack(logicalActionId))
+            boostShotContinuation = null;
+
         currentActionSelection = selection;
         currentAnimationIndex = actionId;
         currentAnimation = robo.ani.animations[actionId];
@@ -1413,7 +1429,8 @@ public partial class TestPlayController : MonoBehaviour
         actionTick = 0;
         ResetScriptRepeatState();
         animeLoop = false;
-        StopAllBurnerEffects();
+        if (preserveBoostBurners) burnerRequestedOutputs.Clear();
+        else StopAllBurnerEffects();
 
         if (logicalActionId == riseStartAction && !landingSequenceActive)
             riseSequenceActive = true;
@@ -1435,9 +1452,7 @@ public partial class TestPlayController : MonoBehaviour
             ResetStepRuntimeState();
         }
 
-        if (logicalActionId != boostShotAction)
-            boostShotContinuation = null;
-        if ((logicalActionId != boostAction && boostShotContinuation == null) || !boostMotionActive)
+        if ((logicalActionId != boostAction && logicalActionId != TestPlayTransformationCore.Flight && boostShotContinuation == null) || !boostMotionActive)
             boostMotionActive = false;
 
         if (!landingSequenceActive && (logicalActionId == riseStartAction || logicalActionId == riseAction || (logicalActionId == boostAction && boostMotionActive)))
@@ -1613,8 +1628,7 @@ public partial class TestPlayController : MonoBehaviour
     void ResetOriginalBlockState()
     {
         // FUN_004b8250 clears +0xB6C only on main-channel block entry.
-        if (TestPlayActionCore.UsesOriginalDualAniChannels(currentAnimationIndex) ||
-            IsMeleeAttackAction(currentAnimationIndex))
+        if (currentActionSelection.primaryChannel == 0)
             auxiliaryEnergyDeltaPerTick = 0;
         // Original numeric Move=0 preserves the current Move component. Keep
         // the dedicated ANI Move state across block/action entry; only STOP or
@@ -1655,6 +1669,18 @@ public partial class TestPlayController : MonoBehaviour
         if (attackSequenceActive)
         {
             FinishNormalAttackSequence();
+            return;
+        }
+
+        // FUN_004dfcb0: completion of the flight ANI requests its exit ANI.
+        if (IsTransformed)
+        {
+            EndTransformation();
+            return;
+        }
+        if (IsCurrentAction(TestPlayTransformationCore.Exit))
+        {
+            ChangeToAirMoveOrLanding();
             return;
         }
 
@@ -1705,6 +1731,14 @@ public partial class TestPlayController : MonoBehaviour
         animation poseAnimation = currentAnimation;
         int poseFrameIndex = frameIndex;
         float poseFrameTime = frameTime;
+        // AT_SUBWEAPON2 is a script-only subtrack: retain the transformed pose.
+        // Unity adapter shares the existing suspended locomotion cursor with boost shots.
+        if (boostShotContinuation?.selection.logicalActionId == TestPlayTransformationCore.Flight)
+        {
+            poseAnimation = robo.ani.animations[boostShotContinuation.selection.poseActionId];
+            poseFrameIndex = boostShotContinuation.frameIndex;
+            poseFrameTime = boostShotContinuation.frameTime;
+        }
         if (presentStandingPoseDuringGroundedShotRecovery &&
             landingSequenceActive && IsGroundRecoveryAction(currentAnimationIndex) &&
             robo != null && robo.ani != null && robo.ani.animations != null)
@@ -1924,6 +1958,7 @@ public partial class TestPlayController : MonoBehaviour
             return Mathf.Clamp01(idleMoveRetention);
         if (logicalActionId == moveAction)
             return Mathf.Clamp01(moveActionRetention);
+        if (logicalActionId == TestPlayTransformationCore.Exit) return 0.98f;
         if (logicalActionId == airIdleAction)
             return Mathf.Clamp01(airIdleMoveRetention);
         return Mathf.Clamp01(defaultMoveRetention);
@@ -1934,7 +1969,7 @@ public partial class TestPlayController : MonoBehaviour
         // FUN_004d68e0 adjusts +0xA80 directly before FUN_004cd840. Keep this
         // separate from ANI Force so the trace reports the action-8 command
         // state (zero) at the common integration boundary.
-        if (!IsCurrentAction(airIdleAction) ||
+        if ((!IsCurrentAction(airIdleAction) && !IsCurrentAction(TestPlayTransformationCore.Exit)) ||
             actionTick >= Mathf.Max(1, airIdleVerticalBrakeTicks) ||
             currentEnergy <= 0f ||
             velocity.y >= Mathf.Max(0f, airIdleVerticalBrakeVelocityThreshold))
@@ -2176,6 +2211,10 @@ public partial class TestPlayController : MonoBehaviour
         state.SetInt(192, shotKeyHeld ? 1 : 0);
         state.SetInt(193, meleeKeyHeld ? 1 : 0);
         state.SetInt(194, sampledGuardKeyHeld || latchedGuardKeyPress ? 1 : 0);
+        // Original +0x53 is consumed only after dash c38 > 5. An early held
+        // V becomes eligible at tick 6; it must not continuously restart flight.
+        previousTransformKeyHeld = state.GetInt(194) != 0;
+        if (!previousTransformKeyHeld) transformKeyLatched = false;
         state.SetInt(195, sampledLockKeyHeld || latchedLockKeyPress ? 1 : 0);
         state.SetInt(196, sampledSpecial1KeyHeld || latchedSpecial1KeyPress ? 1 : 0);
         state.SetInt(197, sampledSpecial2KeyHeld || latchedSpecial2KeyPress ? 1 : 0);
@@ -2246,6 +2285,7 @@ public partial class TestPlayController : MonoBehaviour
         sampledSpecial3KeyHeld = false;
         previousShotKeyHeld = false;
         previousMeleeKeyHeld = false;
+        previousTransformKeyHeld = transformKeyLatched = false;
         shotKeyPressedThisTick = false;
         meleeKeyPressedThisTick = false;
         Array.Clear(previousSpecialKeyHeld, 0, previousSpecialKeyHeld.Length);
@@ -2374,6 +2414,21 @@ public partial class TestPlayController : MonoBehaviour
 
     void UpdateActionFromInput()
     {
+        if (IsTransformed)
+        {
+            // FUN_004dfcb0: subtrack attacks keep the flight callback and defer
+            // input-release exit; exhaustion still terminates the Unity adapter.
+            if (ShouldEndTransformation()) { EndTransformation(); return; }
+            if (boostShotContinuation != null) return;
+            int transformedAttack = GetTransformationAttackInput();
+            if (transformedAttack >= 0)
+            {
+                if (transformedAttack >= 116 && transformedAttack <= 118)
+                    FaceLockedTargetForSpecialAttack();
+                StartNormalAttackAction(transformedAttack);
+            }
+            return;
+        }
         // FUN_004de120: exhaustion ends boost immediately; release waits for
         // the secondary shot channel to finish.
         if (boostShotContinuation != null && !HasMovementEnergy())
@@ -2396,6 +2451,19 @@ public partial class TestPlayController : MonoBehaviour
         if (landingSequenceActive)
             return;
 
+        if (IsCurrentAction(boostAction) && boostMotionActive && actionTick > 5 &&
+            previousTransformKeyHeld && !transformKeyLatched && !ShouldEndOriginalStyleBoost())
+        {
+            transformKeyLatched = true;
+            if (HasUsableAction(TestPlayTransformationCore.Flight) &&
+                robo.ani.animations[TestPlayTransformationCore.Flight].frames?.Count > 0)
+            {
+                transformationPitch = 0f;
+                ChangeAnimation(TestPlayTransformationCore.Flight);
+                return;
+            }
+        }
+
         if (TryUpdateNormalAttackSequence())
             return;
 
@@ -2406,8 +2474,11 @@ public partial class TestPlayController : MonoBehaviour
         {
             if (normalAttackInput)
                 StartNormalAttackAction(oneShotAction);
-            else
+            else if (HasUsableAction(oneShotAction))
+            {
+                FaceLockedTargetForSpecialAttack();
                 ChangeAnimation(oneShotAction);
+            }
             return;
         }
 
@@ -2459,7 +2530,8 @@ public partial class TestPlayController : MonoBehaviour
                     StartAirRiseAction();
                 return;
             }
-            else if (heldAction >= 0 && GetLogicalActionId(currentAnimationIndex) != heldAction)
+            else if (heldAction >= 0 && GetLogicalActionId(currentAnimationIndex) != heldAction &&
+                     !(IsCurrentAction(TestPlayTransformationCore.Exit) && heldAction == airIdleAction))
                 ChangeAnimation(heldAction);
             return;
         }
@@ -2499,6 +2571,28 @@ public partial class TestPlayController : MonoBehaviour
         moveAnimationActive = false;
     }
 
+    void FaceLockedTargetForSpecialAttack()
+    {
+        Transform locked = GetLockedTargetTransform();
+        if (locked == null || robo == null || robo.root == null) return;
+        Transform root = robo.root.transform;
+        Vector3 direction = locked.position - root.position;
+        direction.y = 0f;
+        if (direction.sqrMagnitude < 0.000001f) return;
+
+        // User-observed original behavior: locked A/D/F starts toward the target.
+        // Unity adapter: align root yaw before the first ANI block, preserving
+        // flight pitch and leaving subsequent ANI movement/turn commands in control.
+        float yaw = Vector3.SignedAngle(
+            FlattenDirection(root.forward, Vector3.forward), direction, Vector3.up);
+        root.rotation = Quaternion.AngleAxis(yaw, Vector3.up) * root.rotation;
+        if (IsTransformed)
+        {
+            boostMoveHeading = root.forward;
+            hasBoostMoveHeading = true;
+        }
+    }
+
     int GetOneShotActionFromInput()
     {
         // Original FUN_004d4130 / 4350 / 4570: press edges and independent
@@ -2519,7 +2613,7 @@ public partial class TestPlayController : MonoBehaviour
             actionTick,
             HasUsableAction(boostShotAction),
             IsSwordEquipped(),
-            HasUsableAction(switchToGunAction),
+            HasActionScript(switchToGunAction),
             shotAction,
             boostShotAction,
             switchToGunAction);
@@ -2540,9 +2634,13 @@ public partial class TestPlayController : MonoBehaviour
 
     int ResolveMeleeInputAction(int direction)
     {
+        // FUN_004d3280 / FUN_004d2300 gate weapon switches on the ANI
+        // script table (+8), not HOD poses. Delta Zain Essence has five
+        // poses but no blocks in action 18: selecting it cannot finish
+        // or execute ChangeWeapon. Such machines enter the attack directly.
         return TestPlayCombatCore.ResolveMeleeInputAction(
             IsSwordEquipped(),
-            HasUsableAction(switchToSwordAction),
+            HasActionScript(switchToSwordAction),
             direction,
             switchToSwordAction,
             meleeAction,
@@ -2587,7 +2685,7 @@ public partial class TestPlayController : MonoBehaviour
     bool IsShotAttackAction(int actionId)
     {
         return (actionId >= 100 && actionId <= 103) ||
-               (actionId >= 106 && actionId <= 108);
+               (actionId >= 106 && actionId <= 108) || TestPlayTransformationCore.IsAttack(actionId);
     }
 
     bool IsMeleeAttackAction(int actionId)
@@ -2607,11 +2705,13 @@ public partial class TestPlayController : MonoBehaviour
         // exposed as @int[151] before executing each ANI block. Basic actions
         // are executed on both channels by ExecuteCurrentAnimationScript; this
         // value is the initial/fallback channel for all other action families.
-        state.SetInt(151, IsMeleeAttackAction(actionId) ? 0 : 1);
+        state.SetInt(151, currentActionSelection.primaryChannel);
     }
 
     bool ExecuteCurrentAnimationScript(string text)
     {
+        if (state != null)
+            state.SetInt(151, currentActionSelection.primaryChannel);
         if (state == null || !currentActionSelection.UsesDualChannels)
             return ExecuteScript(text);
 
@@ -2631,8 +2731,10 @@ public partial class TestPlayController : MonoBehaviour
 
     void StartNormalAttackAction(int actionId)
     {
-        boostShotContinuation = IsCurrentAction(boostAction) && boostMotionActive &&
-            (actionId == boostShotAction || actionId == 107 || actionId == 108)
+        bool transformedSubtrack = IsTransformed && TestPlayTransformationCore.IsAttack(actionId) &&
+            TestPlayTransformationCore.AttackType(robo.ani.animations[actionId]) != 2;
+        boostShotContinuation = (IsCurrentAction(boostAction) && boostMotionActive &&
+            (actionId == boostShotAction || actionId == 107 || actionId == 108)) || transformedSubtrack
             ? new BoostShotContinuation {
                 selection = currentActionSelection, elapsed = actionTick,
                 scriptIndex = scriptIndex, scriptTick = scriptTick,
@@ -2733,14 +2835,14 @@ public partial class TestPlayController : MonoBehaviour
         if (boostShotContinuation != null)
         {
             var continuation = boostShotContinuation;
-            boostShotContinuation = null;
             attackSequenceActive = meleeApproachActive = meleeComboInputPending = false;
             groundedStationaryShotRecoveryPresentationRequested = false;
             swordCancelAction = -1;
             actionTick = continuation.elapsed;
-            if (!ShouldEndOriginalStyleBoost())
+            bool transformed = continuation.selection.logicalActionId == TestPlayTransformationCore.Flight;
+            if (transformed ? !ShouldEndTransformation(true) : !ShouldEndOriginalStyleBoost())
             {
-                RecordCombatTransition(boostAction, TestPlayCombatDecisionReason.AttackFinished);
+                RecordCombatTransition(continuation.selection.logicalActionId, TestPlayCombatDecisionReason.AttackFinished);
                 ChangeAnimation(continuation.selection, true);
                 ResetOriginalBlockState();
                 actionTick = continuation.elapsed;
@@ -2757,6 +2859,8 @@ public partial class TestPlayController : MonoBehaviour
                     burnerRequestedOutputs[burner.Key] = burner.Value;
                 return;
             }
+            if (transformed) { EndTransformation(); return; }
+            boostShotContinuation = null;
         }
         bool presentStandingRecovery = groundedStationaryShotRecoveryPresentationRequested &&
             !airborneFlag && currentActionSelection.logicalActionId == shotAction;
@@ -2844,6 +2948,42 @@ public partial class TestPlayController : MonoBehaviour
             boostMinimumReleaseTicks);
     }
 
+    bool ShouldEndTransformation(bool attackFinished = false)
+    {
+        if (!HasMovementEnergy()) return true;
+        int elapsed = boostShotContinuation?.elapsed ?? actionTick;
+        return (boostShotContinuation == null || attackFinished) && elapsed > 30 &&
+            state.GetInt(194) == 0 && !riseKeyHeld && !IsDirectionInput(state.GetInt(190));
+    }
+
+    int GetTransformationAttackInput()
+    {
+        // FUN_004dfcb0: transformed attacks unlock after c38 > 19; C has no branch.
+        if (actionTick <= 19) return -1;
+        int action = shotKeyPressedThisTick && attackCooldownTicks[0] <= 0 ? 113 : -1;
+        for (int i = 0; action < 0 && i < 3; i++)
+            if (specialKeyPressedThisTick[i] && attackCooldownTicks[i + 2] <= 0) action = 116 + i;
+        return HasUsableAction(action) ? action : -1;
+    }
+
+    void EndTransformation()
+    {
+        ResetTransformationAttitude();
+        boostShotContinuation = null;
+        boostMotionActive = attackSequenceActive = false;
+        // FUN_004dfcb0 enters 26 with the air-idle callback, or 8 if absent.
+        StartAirborneLocomotionSequence(HasUsableAction(TestPlayTransformationCore.Exit)
+            ? TestPlayTransformationCore.Exit : airIdleAction, false);
+    }
+
+    void ResetTransformationAttitude()
+    {
+        transformationPitch = 0f;
+        if (robo != null && robo.root != null)
+            robo.root.transform.rotation = Quaternion.LookRotation(
+                FlattenDirection(robo.root.transform.forward, Vector3.forward), Vector3.up);
+    }
+
     bool ShouldEndOriginalStyleRise()
     {
         return TestPlayLocomotionCore.ShouldEndRise(
@@ -2913,7 +3053,7 @@ public partial class TestPlayController : MonoBehaviour
             delta = -Mathf.Max(0f, stepEnergyPerTick);
         else if (IsCurrentAction(riseAction) && riseSequenceActive)
             delta = -Mathf.Max(0f, riseEnergyPerTick);
-        else if ((IsCurrentAction(boostAction) || boostShotContinuation != null) && boostMotionActive)
+        else if (IsBoostLocomotion && boostMotionActive)
             delta = -Mathf.Max(0f, boostEnergyPerTick);
         else if (!airborneFlag)
             // Character initialization sets +0xD24 to 24 independently from
@@ -2972,7 +3112,7 @@ public partial class TestPlayController : MonoBehaviour
         else if (action == 13 || action == 14 || action == 15 || action == 17) amount = 2f;
         else if (action == riseStartAction || action == riseAction || action == airMoveAction ||
                  action == airIdleAction || IsStepAction(currentAnimationIndex) ||
-                 action == boostAction || action == 23 || IsShotAttackAction(currentAnimationIndex) ||
+                 action == boostAction || action == 23 || action == 25 || action == 26 || IsShotAttackAction(currentAnimationIndex) ||
                  (action == meleeAction && meleeApproachActive)) amount = 1f;
         if (amount > 0f)
         {
@@ -3048,7 +3188,7 @@ public partial class TestPlayController : MonoBehaviour
     {
         if (sessionReactionActive && velocity.y > 0f)
             return true;
-        if ((IsCurrentAction(boostAction) || boostShotContinuation != null) && boostMotionActive)
+        if (IsBoostLocomotion && boostMotionActive)
             return true;
         if ((IsCurrentAction(riseStartAction) || IsCurrentAction(riseAction)) && riseSequenceActive)
             return true;
@@ -3103,6 +3243,13 @@ public partial class TestPlayController : MonoBehaviour
 
     TestPlayActionSelection ResolveShotActionSelection(int selectedActionId)
     {
+        if (TestPlayTransformationCore.IsAttack(selectedActionId))
+        {
+            var selection = ResolveActionSelection(selectedActionId);
+            if (TestPlayTransformationCore.AttackType(robo.ani.animations[selectedActionId]) == 2)
+            { selection.primaryChannel = 0; selection.secondaryChannel = 1; }
+            return selection;
+        }
         if (selectedActionId == shotAction || selectedActionId == boostShotAction)
             return ResolveActionSelection(selectedActionId);
 
@@ -3531,7 +3678,7 @@ public partial class TestPlayController : MonoBehaviour
     bool TryGetOriginalStyleBoostWorldMove(Transform root, Vector3 scriptedLocalMove, out Vector3 worldMove)
     {
         worldMove = Vector3.zero;
-        if (root == null || (!IsCurrentAction(boostAction) && boostShotContinuation == null) || !boostMotionActive)
+        if (root == null || !IsBoostLocomotion || !boostMotionActive)
             return false;
 
         if (!TryGetBoostReferenceBasis(root, out Vector3 referenceForward, out Vector3 referenceRight))
@@ -3548,10 +3695,19 @@ public partial class TestPlayController : MonoBehaviour
             ? GetDirectionVector(direction, referenceForward, referenceRight)
             : boostMoveHeading;
 
+        if (IsTransformed)
+        {
+            // FUN_004dfcb0: planar desired direction plus -pitch/50, 2 degrees/tick.
+            desiredHeading = FlattenDirection(desiredHeading, referenceForward);
+            desiredHeading.y = -transformationPitch / 50f;
+            desiredHeading.Normalize();
+        }
+
         if (desiredHeading.sqrMagnitude > 0.000001f)
         {
             float turnDegrees;
-            if ((boostShotContinuation?.elapsed ?? actionTick) < 10)
+            if (IsTransformed) turnDegrees = 2f;
+            else if ((boostShotContinuation?.elapsed ?? actionTick) < 10)
             {
                 turnDegrees = Mathf.Max(0f, boostInitialTurnDegreesPerTick);
             }
@@ -3572,6 +3728,12 @@ public partial class TestPlayController : MonoBehaviour
 
         float horizontalAmount = new Vector2(scriptedLocalMove.x, scriptedLocalMove.z).magnitude;
         worldMove = boostMoveHeading * horizontalAmount + Vector3.up * scriptedLocalMove.y;
+        if (IsTransformed)
+        {
+            // Original +0xBC4 input increments then common FUN_004cd840 damping.
+            transformationPitch = (transformationPitch + (state.GetInt(194) != 0 ? 2f : 0f) -
+                (riseKeyHeld ? 2f : 0f)) * 0.95f;
+        }
         return true;
     }
 
@@ -3670,6 +3832,7 @@ public partial class TestPlayController : MonoBehaviour
 
     void ResetBoostRuntimeState()
     {
+        transformationPitch = 0f;
         boostReferenceForward = Vector3.zero;
         boostMoveHeading = Vector3.zero;
         hasBoostReference = false;
@@ -3936,6 +4099,7 @@ public partial class TestPlayController : MonoBehaviour
 
     bool IsAirborneLocomotionAction(int actionId)
     {
+        if (GetLogicalActionId(actionId) == TestPlayTransformationCore.Exit) return true;
         TestPlayLocomotionState locomotionState =
             TestPlayLocomotionCore.Classify(actionId, GetLocomotionActions());
         return locomotionState == TestPlayLocomotionState.AirMove ||
@@ -4549,7 +4713,24 @@ public partial class TestPlayController : MonoBehaviour
             case "goposeindex": if (args.Count > 0) frameIndex = Mathf.Max(0, args[0].AsInt()); frameTime = 0f; break;
             case "changeanime":
                 if (args.Count > 0)
-                    ChangeAnimation(args[0].AsInt());
+                {
+                    if (args.Count < 3) ChangeAnimation(args[0].AsInt());
+                    else
+                    {
+                        // Original FUN_004b77a0: p2 selects main(0), secondary(1),
+                        // or both(2), independently of the destination ANI number.
+                        // Unity still uses one pose/timeline; independent split-track
+                        // poses and p1 blend duration remain an adapter boundary.
+                        int channel = args[2].AsInt();
+                        if (channel >= 0 && channel <= 2)
+                        {
+                            var selection = ResolveActionSelection(args[0].AsInt());
+                            selection.primaryChannel = channel == 1 ? 1 : 0;
+                            selection.secondaryChannel = channel == 2 ? 1 : -1;
+                            ChangeAnimation(selection, true);
+                        }
+                    }
+                }
                 abortScriptExecution = true;
                 break;
             case "changewapon":
@@ -4605,6 +4786,10 @@ public partial class TestPlayController : MonoBehaviour
                 LogMotionAssignment("vF_Multi", rawLine);
                 break;
             case "animeloop": animeLoop = values.Count > 0 && values[0].AsBool(); break;
+            // These are parsed metadata in the original. BoostDashMode is read
+            // but unused by its parser; do not turn it into a second state machine.
+            case "boostdashmode":
+            case "ts_actiontype": break;
             case "swordcancel": swordCancelAction = values.Count > 0 ? values[0].AsInt(-1) : -1; break;
             case "movelock":
                 moveLocked = values.Count == 0 || values[0].AsBool();
@@ -7972,7 +8157,7 @@ public partial class TestPlayController : MonoBehaviour
             if (info == null || info.Ps == null)
                 continue;
 
-            bool requested = burnerRequestedOutputs.ContainsKey(info.Id) && info.Scale > 0f;
+            bool requested = TryGetActiveBurnerOutput(info.Id, out _) && info.Scale > 0f;
             if (requested)
             {
                 if (!info.Ps.isPlaying)
@@ -8003,7 +8188,7 @@ public partial class TestPlayController : MonoBehaviour
                 continue;
 
             float output;
-            bool requested = burnerRequestedOutputs.TryGetValue(info.Id, out output);
+            bool requested = TryGetActiveBurnerOutput(info.Id, out output);
             // Windom_Data/TestPlay currently loads Robo data; CShip has a separate
             // original constructor and speed-scaled draw path.
             TestPlayOriginalBurnerDrawParameters originalDraw =
@@ -8092,7 +8277,18 @@ public partial class TestPlayController : MonoBehaviour
                 break;
             }
         }
+        if (!active && boostShotContinuation != null)
+            foreach (float output in boostShotContinuation.burners.Values)
+                if (output > 0f) { active = true; break; }
         presentationRuntime?.SetPropulsionLoopActive(active);
+    }
+
+    bool TryGetActiveBurnerOutput(int id, out float output)
+    {
+        // Lower-channel requests survive upper-channel block resets during a shot.
+        if (boostShotContinuation != null && boostShotContinuation.burners.TryGetValue(id, out output))
+            return true;
+        return burnerRequestedOutputs.TryGetValue(id, out output);
     }
 
     float EstimateDamageForWeapon(int weaponType)
@@ -8239,6 +8435,7 @@ public partial class TestPlayController : MonoBehaviour
 
     void ResetRuntimeFlags()
     {
+        if (IsTransformed) ResetTransformationAttitude();
         type11ShotSequence = 0;
         Array.Clear(contactParameters, 0, contactParameters.Length);
         contactSequence = 0; DownSmokeSpawnCount = 0;
